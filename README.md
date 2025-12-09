@@ -294,13 +294,25 @@ docker run -p 8000:8000 py-symbol-analyze
 
 ### 日志文件位置
 
-日志文件保存在 `~/.py_symbol_analyze/logs/` 目录下，按日期命名：
+默认日志文件保存在**当前工作目录**下的 `logs/` 文件夹中，按日期命名：
 
 ```
-~/.py_symbol_analyze/logs/
-├── py_symbol_analyze_20251209.log      # 主日志
+./logs/
+├── py_symbol_analyze.server_20251209.log   # 服务器日志
 ├── py_symbol_analyze.parser_20251209.log   # 解析器日志
-└── py_symbol_analyze.resolver_20251209.log # 解析器日志
+└── py_symbol_analyze.resolver_20251209.log # 依赖解析日志
+```
+
+### 自定义日志目录
+
+可以通过命令行参数 `--log-dir` 指定日志存储目录：
+
+```bash
+# 指定日志目录
+py-symbol-analyze --log-dir /var/log/py-symbol-analyze
+
+# 或者使用短参数
+py-symbol-analyze -l /tmp/my-logs
 ```
 
 ### 日志格式
@@ -327,23 +339,25 @@ docker run -p 8000:8000 py-symbol-analyze
 - 符号查询结果
 - 警告和错误信息
 
-### 自定义日志配置
-
-可以通过代码自定义日志配置：
+### 通过代码自定义日志配置
 
 ```python
-from py_symbol_analyze.logger import setup_logger
+from py_symbol_analyze.logger import set_log_dir, setup_logger
+from pathlib import Path
 import logging
 
-# 设置 DEBUG 级别以查看详细信息
+# 方法1：设置全局日志目录（推荐）
+set_log_dir("/custom/log/path")
+
+# 方法2：创建自定义日志记录器
 logger = setup_logger(
     name="py_symbol_analyze",
-    level=logging.DEBUG,
-    log_dir=Path("/custom/log/path"),  # 自定义日志目录
-    console_output=True,   # 是否输出到控制台
-    file_output=True,      # 是否输出到文件
+    level=logging.DEBUG,           # 设置 DEBUG 级别
+    log_dir=Path("/custom/path"),  # 自定义日志目录
+    console_output=True,           # 是否输出到控制台
+    file_output=True,              # 是否输出到文件
     max_file_size=10 * 1024 * 1024,  # 单个文件最大 10MB
-    backup_count=5,        # 保留 5 个备份文件
+    backup_count=5,                # 保留 5 个备份文件
 )
 ```
 

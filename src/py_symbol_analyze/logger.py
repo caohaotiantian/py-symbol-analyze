@@ -11,8 +11,11 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
 
-# 默认日志目录
-DEFAULT_LOG_DIR = Path.home() / ".py_symbol_analyze" / "logs"
+# 默认日志目录（当前工作目录下的 logs 文件夹）
+DEFAULT_LOG_DIR = Path.cwd() / "logs"
+
+# 全局日志目录配置（可通过 set_log_dir 修改）
+_configured_log_dir: Optional[Path] = None
 
 # 日志格式
 CONSOLE_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
@@ -20,6 +23,34 @@ FILE_FORMAT = (
     "%(asctime)s | %(levelname)-8s | %(name)s | %(filename)s:%(lineno)d | %(message)s"
 )
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def set_log_dir(log_dir: Optional[str | Path]) -> Path:
+    """
+    设置全局日志目录
+
+    Args:
+        log_dir: 日志目录路径，None 表示使用默认目录
+
+    Returns:
+        设置后的日志目录路径
+    """
+    global _configured_log_dir
+    if log_dir is None:
+        _configured_log_dir = None
+        return DEFAULT_LOG_DIR
+    _configured_log_dir = Path(log_dir).resolve()
+    return _configured_log_dir
+
+
+def get_log_dir() -> Path:
+    """
+    获取当前日志目录
+
+    Returns:
+        当前配置的日志目录路径
+    """
+    return _configured_log_dir or DEFAULT_LOG_DIR
 
 
 def setup_logger(
@@ -37,7 +68,7 @@ def setup_logger(
     Args:
         name: 日志记录器名称
         level: 日志级别
-        log_dir: 日志文件保存目录
+        log_dir: 日志文件保存目录（None 则使用全局配置或默认目录）
         console_output: 是否输出到控制台
         file_output: 是否输出到文件
         max_file_size: 单个日志文件最大大小（字节）
@@ -64,11 +95,12 @@ def setup_logger(
 
     # 文件输出
     if file_output:
-        log_dir = log_dir or DEFAULT_LOG_DIR
-        log_dir.mkdir(parents=True, exist_ok=True)
+        # 优先使用传入的 log_dir，其次使用全局配置，最后使用默认目录
+        actual_log_dir = log_dir or get_log_dir()
+        actual_log_dir.mkdir(parents=True, exist_ok=True)
 
         # 按日期命名日志文件
-        log_file = log_dir / f"{name}_{datetime.now().strftime('%Y%m%d')}.log"
+        log_file = actual_log_dir / f"{name}_{datetime.now().strftime('%Y%m%d')}.log"
 
         file_handler = RotatingFileHandler(
             log_file,

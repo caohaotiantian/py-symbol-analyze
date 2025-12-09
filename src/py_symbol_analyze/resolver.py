@@ -18,7 +18,10 @@ from .models import (
 )
 from .parser import ParsedSymbol, ProjectParser
 
-logger = get_logger("py_symbol_analyze.resolver")
+
+def _get_logger():
+    """获取 logger（延迟初始化）"""
+    return get_logger("py_symbol_analyze.resolver")
 
 
 class DependencyResolver:
@@ -30,7 +33,7 @@ class DependencyResolver:
         # 添加项目路径到 sys.path 以便 jedi 能正确解析
         if str(self.project_root) not in sys.path:
             sys.path.insert(0, str(self.project_root))
-        logger.debug(f"初始化依赖解析器，项目路径: {self.project_root}")
+        _get_logger().debug(f"初始化依赖解析器，项目路径: {self.project_root}")
 
     def _resolve_import_path(
         self, import_path: str, current_file: str
@@ -137,7 +140,7 @@ class DependencyResolver:
 
         遍历符号的 callees，尝试找到每个被调用符号的定义。
         """
-        logger.debug(f"解析符号依赖: {symbol.name}, callees: {symbol.callees}")
+        _get_logger().debug(f"解析符号依赖: {symbol.name}, callees: {symbol.callees}")
         dependencies = []
         seen_symbols = set()
 
@@ -267,15 +270,15 @@ class DependencyResolver:
             class_name: 类名
             file_path: 可选，指定文件路径
         """
-        logger.info(f"分析类: {class_name}, 文件提示: {file_path}")
+        _get_logger().info(f"分析类: {class_name}, 文件提示: {file_path}")
         # 查找类定义
         symbol = self.project_parser.find_symbol(
             class_name, symbol_type="class", file_hint=file_path
         )
         if not symbol:
-            logger.warning(f"未找到类: {class_name}")
+            _get_logger().warning(f"未找到类: {class_name}")
             return None
-        logger.debug(f"找到类定义位置: {symbol.file_path}:{symbol.start_line}")
+        _get_logger().debug(f"找到类定义位置: {symbol.file_path}:{symbol.start_line}")
 
         # 解析依赖
         dependencies = self.resolve_dependencies(symbol)
@@ -322,7 +325,7 @@ class DependencyResolver:
             file_path: 可选，指定文件路径
             host_class: 可选，如果是类方法，指定类名
         """
-        logger.info(
+        _get_logger().info(
             f"分析函数: {function_name}, 文件提示: {file_path}, 所属类: {host_class}"
         )
         # 查找函数定义
@@ -336,11 +339,11 @@ class DependencyResolver:
             candidates = [c for c in candidates if file_path in c.file_path]
 
         if not candidates:
-            logger.warning(f"未找到函数: {function_name}")
+            _get_logger().warning(f"未找到函数: {function_name}")
             return None
 
         symbol = candidates[0]
-        logger.debug(f"找到函数定义位置: {symbol.file_path}:{symbol.start_line}")
+        _get_logger().debug(f"找到函数定义位置: {symbol.file_path}:{symbol.start_line}")
 
         # 解析依赖
         dependencies = self.resolve_dependencies(symbol)
@@ -383,7 +386,7 @@ class SymbolAnalyzer:
     def __init__(self, project_root: str):
         self.project_root = project_root
         self.resolver = DependencyResolver(project_root)
-        logger.info(f"符号分析器初始化完成，项目路径: {project_root}")
+        _get_logger().info(f"符号分析器初始化完成，项目路径: {project_root}")
 
     def query_class(
         self, class_name: str, file_path: Optional[str] = None

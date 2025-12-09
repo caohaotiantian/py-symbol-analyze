@@ -12,7 +12,10 @@ from tree_sitter import Language, Node, Parser, Tree
 
 from .logger import get_logger
 
-logger = get_logger("py_symbol_analyze.parser")
+
+def _get_logger():
+    """获取 logger（延迟初始化）"""
+    return get_logger("py_symbol_analyze.parser")
 
 
 @dataclass
@@ -46,10 +49,10 @@ class PythonParser:
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 source_code = f.read()
-            logger.debug(f"成功解析文件: {file_path}")
+            _get_logger().debug(f"成功解析文件: {file_path}")
             return self.parser.parse(bytes(source_code, "utf-8"))
         except Exception as e:
-            logger.error(f"解析文件失败 {file_path}: {e}")
+            _get_logger().error(f"解析文件失败 {file_path}: {e}")
             return None
 
     def parse_source(self, source_code: str) -> Tree:
@@ -335,22 +338,22 @@ class ProjectParser:
             source_bytes = bytes(source_code, "utf-8")
             tree = self.parser.parser.parse(source_bytes)
             self._file_cache[file_str] = (mtime, tree, source_bytes)
-            logger.debug(f"缓存解析结果: {file_path}")
+            _get_logger().debug(f"缓存解析结果: {file_path}")
             return tree, source_bytes
         except Exception as e:
-            logger.error(f"解析文件失败 {file_path}: {e}")
+            _get_logger().error(f"解析文件失败 {file_path}: {e}")
             return None
 
     def build_index(self, force: bool = False):
         """构建符号索引"""
         if self._indexed and not force:
-            logger.debug("使用已有索引")
+            _get_logger().debug("使用已有索引")
             return
 
-        logger.info(f"开始构建符号索引，项目路径: {self.project_root}")
+        _get_logger().info(f"开始构建符号索引，项目路径: {self.project_root}")
         self._symbol_index.clear()
         python_files = self._get_python_files()
-        logger.info(f"发现 {len(python_files)} 个 Python 文件")
+        _get_logger().info(f"发现 {len(python_files)} 个 Python 文件")
 
         class_count = 0
         func_count = 0
@@ -380,7 +383,7 @@ class ProjectParser:
                 func_count += 1
 
         self._indexed = True
-        logger.info(f"索引构建完成: {class_count} 个类, {func_count} 个函数")
+        _get_logger().info(f"索引构建完成: {class_count} 个类, {func_count} 个函数")
 
     def find_symbol(
         self,

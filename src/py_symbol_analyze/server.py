@@ -20,11 +20,8 @@ from mcp.types import (
     Tool,
 )
 
-from .logger import get_logger
+from .logger import get_logger, set_log_dir
 from .resolver import SymbolAnalyzer
-
-# 获取日志记录器
-logger = get_logger("py_symbol_analyze.server")
 
 # 默认配置
 DEFAULT_HOST = "127.0.0.1"
@@ -34,11 +31,16 @@ DEFAULT_PORT = 8000
 _analyzer: Optional[SymbolAnalyzer] = None
 
 
+def _get_logger():
+    """获取 logger（延迟初始化）"""
+    return get_logger("py_symbol_analyze.server")
+
+
 def get_analyzer(project_root: str) -> SymbolAnalyzer:
     """获取或创建分析器实例"""
     global _analyzer
     if _analyzer is None or _analyzer.project_root != project_root:
-        logger.info(f"创建新的分析器实例，项目路径: {project_root}")
+        _get_logger().info(f"创建新的分析器实例，项目路径: {project_root}")
         _analyzer = SymbolAnalyzer(project_root)
     return _analyzer
 
@@ -181,7 +183,7 @@ async def list_tools() -> list[Tool]:
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """处理工具调用"""
-    logger.info(f"收到工具调用请求: {name}, 参数: {arguments}")
+    _get_logger().info(f"收到工具调用请求: {name}, 参数: {arguments}")
     try:
         if name == "query_class":
             result = await handle_query_class(arguments)
@@ -193,11 +195,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = await handle_list_symbols(arguments)
         else:
             raise ValueError(f"Unknown tool: {name}")
-        logger.info(f"工具 {name} 执行成功")
+        _get_logger().info(f"工具 {name} 执行成功")
         return result
 
     except KeyError as e:
-        logger.error(f"Missing required parameter: {e}")
+        _get_logger().error(f"Missing required parameter: {e}")
         return [
             TextContent(
                 type="text",
@@ -212,7 +214,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             )
         ]
     except Exception as e:
-        logger.error(f"Error executing tool {name}: {e}", exc_info=True)
+        _get_logger().error(f"Error executing tool {name}: {e}", exc_info=True)
         return [
             TextContent(
                 type="text",
@@ -363,13 +365,13 @@ async def handle_list_symbols(arguments: dict) -> list[TextContent]:
 
 async def run_stdio_server():
     """运行 stdio 模式的 MCP Server"""
-    logger.info("正在启动 Python Symbol Analyzer MCP Server (stdio 模式)...")
+    _get_logger().info("正在启动 Python Symbol Analyzer MCP Server (stdio 模式)...")
     async with stdio_server() as (read_stream, write_stream):
-        logger.info("MCP Server 已启动，等待连接...")
+        _get_logger().info("MCP Server 已启动，等待连接...")
         await server.run(
             read_stream, write_stream, server.create_initialization_options()
         )
-    logger.info("MCP Server 已关闭")
+    _get_logger().info("MCP Server 已关闭")
 
 
 def create_starlette_app():
@@ -386,7 +388,7 @@ def create_starlette_app():
 
     async def handle_sse(request):
         """处理 SSE 连接"""
-        logger.info(f"收到 SSE 连接请求: {request.client}")
+        _get_logger().info(f"收到 SSE 连接请求: {request.client}")
         async with sse.connect_sse(
             request.scope, request.receive, request._send
         ) as streams:
@@ -467,11 +469,11 @@ def run_http_server(
     """
     import uvicorn
 
-    logger.info("正在启动 Python Symbol Analyzer MCP Server (SSE 模式)...")
-    logger.info(f"监听地址: http://{host}:{port}")
-    logger.info(f"SSE 端点: http://{host}:{port}/sse")
-    logger.info(f"消息端点: http://{host}:{port}/messages")
-    logger.info(f"健康检查: http://{host}:{port}/health")
+    _get_logger().info("正在启动 Python Symbol Analyzer MCP Server (SSE 模式)...")
+    _get_logger().info(f"监听地址: http://{host}:{port}")
+    _get_logger().info(f"SSE 端点: http://{host}:{port}/sse")
+    _get_logger().info(f"消息端点: http://{host}:{port}/messages")
+    _get_logger().info(f"健康检查: http://{host}:{port}/health")
 
     app = create_starlette_app()
     uvicorn.run(app, host=host, port=port, log_level="info")
@@ -494,6 +496,9 @@ def main():
 
   # 指定地址和端口
   py-symbol-analyze --host 0.0.0.0 --port 8080
+
+  # 指定日志目录
+  py-symbol-analyze --log-dir /var/log/py-symbol-analyze
 
   # 使用 stdio 模式
   py-symbol-analyze --transport stdio
@@ -523,7 +528,18 @@ def main():
         help=f"SSE 模式监听端口 (默认: {DEFAULT_PORT})",
     )
 
+    parser.add_argument(
+        "--log-dir",
+        "-l",
+        default=None,
+        help="日志文件存储目录 (默认: 当前目录下的 logs 文件夹)",
+    )
+
     args = parser.parse_args()
+
+    # 设置日志目录（必须在获取 logger 之前）
+    log_dir = set_log_dir(args.log_dir)
+    _get_logger().info(f"日志目录: {log_dir}")
 
     if args.transport == "stdio":
         asyncio.run(run_stdio_server())
