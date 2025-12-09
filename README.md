@@ -28,7 +28,7 @@ uv pip install -e .
 ## 快速开始
 
 ```bash
-# 安装后直接运行（默认使用 HTTP 模式，端口 8000）
+# 安装后直接运行（默认使用 SSE 模式，端口 8000）
 py-symbol-analyze
 
 # 指定端口
@@ -43,17 +43,18 @@ py-symbol-analyze --host 0.0.0.0 --port 8080
 - 健康检查: http://127.0.0.1:8000/health
 - 服务器信息: http://127.0.0.1:8000/info
 - SSE 端点: http://127.0.0.1:8000/sse
+- 消息端点: http://127.0.0.1:8000/messages
 
 ## 传输模式
 
 服务器支持两种传输模式：
 
-### 1. Streamable HTTP 模式（默认）
+### 1. SSE 模式（默认）
 
-HTTP 流式传输模式，支持 SSE (Server-Sent Events)，适用于远程调用或 Web 集成。
+HTTP SSE (Server-Sent Events) 流式传输模式，适用于远程调用或 Web 集成。
 
 ```bash
-# 启动 HTTP 模式（默认）
+# 启动 SSE 模式（默认）
 py-symbol-analyze
 
 # 指定端口
@@ -65,12 +66,12 @@ py-symbol-analyze --host 0.0.0.0 --port 8080
 
 #### HTTP 端点
 
-| 端点         | 方法 | 描述         |
-| ------------ | ---- | ------------ |
-| `/health`    | GET  | 健康检查     |
-| `/info`      | GET  | 服务器信息   |
-| `/sse`       | GET  | SSE 连接端点 |
-| `/messages/` | POST | MCP 消息端点 |
+| 端点        | 方法 | 描述         |
+| ----------- | ---- | ------------ |
+| `/health`   | GET  | 健康检查     |
+| `/info`     | GET  | 服务器信息   |
+| `/sse`      | GET  | SSE 连接端点 |
+| `/messages` | POST | MCP 消息端点 |
 
 ### 2. stdio 模式
 
@@ -84,14 +85,13 @@ py-symbol-analyze --transport stdio
 #### 命令行参数
 
 ```
-usage: py-symbol-analyze [-h] [--transport {stdio,http,streamable-http}]
-                         [--host HOST] [--port PORT] [--stateless]
+usage: py-symbol-analyze [-h] [--transport {stdio,sse}]
+                         [--host HOST] [--port PORT]
 
 参数:
-  --transport, -t    传输方式: streamable-http/http (默认) 或 stdio
-  --host, -H         HTTP 模式监听地址 (默认: 127.0.0.1)
-  --port, -p         HTTP 模式监听端口 (默认: 8000)
-  --stateless        使用无状态模式
+  --transport, -t    传输方式: sse (默认) 或 stdio
+  --host, -H         SSE 模式监听地址 (默认: 127.0.0.1)
+  --port, -p         SSE 模式监听端口 (默认: 8000)
 ```
 
 ## 配置 MCP

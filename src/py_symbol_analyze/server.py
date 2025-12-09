@@ -372,25 +372,20 @@ async def run_stdio_server():
     logger.info("MCP Server 已关闭")
 
 
-def create_starlette_app(
-    stateless: bool = False,
-):
-    """
-    创建 Starlette 应用，用于 HTTP 传输
-
-    Args:
-        stateless: 是否使用无状态模式（每个请求创建新的服务器实例）
-    """
+def create_starlette_app():
+    """创建 Starlette 应用，用于 HTTP 传输"""
     from mcp.server.sse import SseServerTransport
     from starlette.applications import Starlette
     from starlette.middleware import Middleware
     from starlette.middleware.cors import CORSMiddleware
+    from starlette.responses import JSONResponse, Response
     from starlette.routing import Mount, Route
 
-    # SSE 传输
-    sse = SseServerTransport("/messages/")
+    # SSE 传输 - 消息端点路径
+    sse = SseServerTransport("/messages")
 
     async def handle_sse(request):
+        """处理 SSE 连接"""
         logger.info(f"收到 SSE 连接请求: {request.client}")
         async with sse.connect_sse(
             request.scope, request.receive, request._send
@@ -398,29 +393,31 @@ def create_starlette_app(
             await server.run(
                 streams[0], streams[1], server.create_initialization_options()
             )
+        # 返回空响应以避免 NoneType 错误
+        return Response()
 
-    # 健康检查端点
     async def health_check(request):
-        from starlette.responses import JSONResponse
-
+        """健康检查端点"""
         return JSONResponse(
             {
                 "status": "healthy",
                 "server": "py-symbol-analyze",
-                "transport": "streamable-http",
+                "transport": "sse",
             }
         )
 
-    # 服务器信息端点
     async def server_info(request):
-        from starlette.responses import JSONResponse
-
+        """服务器信息端点"""
         return JSONResponse(
             {
                 "name": "py-symbol-analyze",
                 "version": "0.1.0",
                 "description": "Python Symbol Analyzer MCP Server",
-                "transport": "streamable-http",
+                "transport": "sse",
+                "endpoints": {
+                    "sse": "/sse",
+                    "messages": "/messages",
+                },
                 "tools": [
                     "query_class",
                     "query_function",
@@ -442,6 +439,7 @@ def create_starlette_app(
     ]
 
     # 创建 Starlette 应用
+    # 注意：/messages 使用 Mount 因为 handle_post_message 是 ASGI 应用
     app = Starlette(
         debug=True,
         middleware=middleware,
@@ -449,7 +447,7 @@ def create_starlette_app(
             Route("/health", health_check, methods=["GET"]),
             Route("/info", server_info, methods=["GET"]),
             Route("/sse", handle_sse, methods=["GET"]),
-            Mount("/messages/", app=sse.handle_post_message),
+            Mount("/messages", app=sse.handle_post_message),
         ],
     )
 
@@ -459,7 +457,6 @@ def create_starlette_app(
 def run_http_server(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
-    stateless: bool = False,
 ):
     """
     运行 HTTP 模式的 MCP Server
@@ -467,17 +464,16 @@ def run_http_server(
     Args:
         host: 监听地址
         port: 监听端口
-        stateless: 是否使用无状态模式
     """
     import uvicorn
 
-    logger.info("正在启动 Python Symbol Analyzer MCP Server (HTTP 模式)...")
+    logger.info("正在启动 Python Symbol Analyzer MCP Server (SSE 模式)...")
     logger.info(f"监听地址: http://{host}:{port}")
     logger.info(f"SSE 端点: http://{host}:{port}/sse")
+    logger.info(f"消息端点: http://{host}:{port}/messages")
     logger.info(f"健康检查: http://{host}:{port}/health")
-    logger.info(f"服务器信息: http://{host}:{port}/info")
 
-    app = create_starlette_app(stateless=stateless)
+    app = create_starlette_app()
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 
@@ -490,7 +486,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  # 使用 HTTP 模式（默认）
+  # 使用 SSE 模式（默认）
   py-symbol-analyze
 
   # 指定端口
@@ -507,16 +503,16 @@ def main():
     parser.add_argument(
         "--transport",
         "-t",
-        choices=["stdio", "http", "streamable-http"],
-        default="streamable-http",
-        help="传输方式: streamable-http/http (默认) 或 stdio",
+        choices=["stdio", "sse"],
+        default="sse",
+        help="传输方式: sse (默认) 或 stdio",
     )
 
     parser.add_argument(
         "--host",
         "-H",
         default=DEFAULT_HOST,
-        help=f"HTTP 模式监听地址 (默认: {DEFAULT_HOST})",
+        help=f"SSE 模式监听地址 (默认: {DEFAULT_HOST})",
     )
 
     parser.add_argument(
@@ -524,13 +520,7 @@ def main():
         "-p",
         type=int,
         default=DEFAULT_PORT,
-        help=f"HTTP 模式监听端口 (默认: {DEFAULT_PORT})",
-    )
-
-    parser.add_argument(
-        "--stateless",
-        action="store_true",
-        help="使用无状态模式（每个请求创建新的服务器实例）",
+        help=f"SSE 模式监听端口 (默认: {DEFAULT_PORT})",
     )
 
     args = parser.parse_args()
@@ -538,11 +528,7 @@ def main():
     if args.transport == "stdio":
         asyncio.run(run_stdio_server())
     else:
-        run_http_server(
-            host=args.host,
-            port=args.port,
-            stateless=args.stateless,
-        )
+        run_http_server(host=args.host, port=args.port)
 
 
 if __name__ == "__main__":
