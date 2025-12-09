@@ -25,9 +25,125 @@ cd py_symbol_analyze
 uv pip install -e .
 ```
 
+## 快速开始
+
+```bash
+# 安装后直接运行（默认使用 HTTP 模式，端口 8000）
+py-symbol-analyze
+
+# 指定端口
+py-symbol-analyze --port 9000
+
+# 指定地址和端口
+py-symbol-analyze --host 0.0.0.0 --port 8080
+```
+
+服务启动后，可以通过以下端点访问：
+
+- 健康检查: http://127.0.0.1:8000/health
+- 服务器信息: http://127.0.0.1:8000/info
+- SSE 端点: http://127.0.0.1:8000/sse
+
+## 传输模式
+
+服务器支持两种传输模式：
+
+### 1. Streamable HTTP 模式（默认）
+
+HTTP 流式传输模式，支持 SSE (Server-Sent Events)，适用于远程调用或 Web 集成。
+
+```bash
+# 启动 HTTP 模式（默认）
+py-symbol-analyze
+
+# 指定端口
+py-symbol-analyze --port 9000
+
+# 指定地址和端口
+py-symbol-analyze --host 0.0.0.0 --port 8080
+```
+
+#### HTTP 端点
+
+| 端点         | 方法 | 描述         |
+| ------------ | ---- | ------------ |
+| `/health`    | GET  | 健康检查     |
+| `/info`      | GET  | 服务器信息   |
+| `/sse`       | GET  | SSE 连接端点 |
+| `/messages/` | POST | MCP 消息端点 |
+
+### 2. stdio 模式
+
+标准输入输出模式，适用于与 IDE 或桌面应用集成。
+
+```bash
+# 启动 stdio 模式
+py-symbol-analyze --transport stdio
+```
+
+#### 命令行参数
+
+```
+usage: py-symbol-analyze [-h] [--transport {stdio,http,streamable-http}]
+                         [--host HOST] [--port PORT] [--stateless]
+
+参数:
+  --transport, -t    传输方式: streamable-http/http (默认) 或 stdio
+  --host, -H         HTTP 模式监听地址 (默认: 127.0.0.1)
+  --port, -p         HTTP 模式监听端口 (默认: 8000)
+  --stateless        使用无状态模式
+```
+
 ## 配置 MCP
 
-### Cursor 配置
+### 方式一：HTTP 模式配置（推荐）
+
+首先启动 HTTP 服务器：
+
+```bash
+# 默认方式启动
+py-symbol-analyze
+
+# 或指定端口
+py-symbol-analyze --port 8000
+```
+
+然后在 MCP 客户端配置中使用 SSE 连接：
+
+```json
+{
+  "mcpServers": {
+    "py-symbol-analyze": {
+      "transport": "sse",
+      "url": "http://localhost:8000/sse"
+    }
+  }
+}
+```
+
+#### 使用 Docker 运行
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY . .
+RUN pip install -e .
+
+EXPOSE 8000
+CMD ["py-symbol-analyze", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+构建并运行：
+
+```bash
+docker build -t py-symbol-analyze .
+docker run -p 8000:8000 py-symbol-analyze
+```
+
+### 方式二：stdio 模式配置
+
+#### Cursor 配置
 
 在 `~/.cursor/mcp.json` 中添加：
 
@@ -36,7 +152,7 @@ uv pip install -e .
   "mcpServers": {
     "py-symbol-analyze": {
       "command": "python",
-      "args": ["-m", "py_symbol_analyze.server"],
+      "args": ["-m", "py_symbol_analyze.server", "--transport", "stdio"],
       "cwd": "/path/to/py_symbol_analyze"
     }
   }
@@ -50,14 +166,21 @@ uv pip install -e .
   "mcpServers": {
     "py-symbol-analyze": {
       "command": "uv",
-      "args": ["run", "python", "-m", "py_symbol_analyze.server"],
+      "args": [
+        "run",
+        "python",
+        "-m",
+        "py_symbol_analyze.server",
+        "--transport",
+        "stdio"
+      ],
       "cwd": "/path/to/py_symbol_analyze"
     }
   }
 }
 ```
 
-### Claude Desktop 配置
+#### Claude Desktop 配置
 
 在 `~/Library/Application Support/Claude/claude_desktop_config.json` 中添加：
 
@@ -66,7 +189,7 @@ uv pip install -e .
   "mcpServers": {
     "py-symbol-analyze": {
       "command": "python",
-      "args": ["-m", "py_symbol_analyze.server"],
+      "args": ["-m", "py_symbol_analyze.server", "--transport", "stdio"],
       "cwd": "/path/to/py_symbol_analyze"
     }
   }
@@ -80,22 +203,20 @@ uv pip install -e .
 查询 Python 类的内容和依赖关系。
 
 **参数:**
+
 - `project_root` (必需): Python 项目的根目录路径
 - `class_name` (必需): 要查询的类名
 - `file_path` (可选): 类所在的文件路径，用于精确定位
 
 **返回示例:**
+
 ```json
 {
-    "node_type": "class",
-    "class_content": "class MyClass:\n    def __init__(self):\n        pass",
-    "file_path": "/path/to/project/module.py",
-    "depends": [
-        "class BaseClass:\n    ..."
-    ],
-    "depends_path": [
-        "/path/to/project/base.py"
-    ]
+  "node_type": "class",
+  "class_content": "class MyClass:\n    def __init__(self):\n        pass",
+  "file_path": "/path/to/project/module.py",
+  "depends": ["class BaseClass:\n    ..."],
+  "depends_path": ["/path/to/project/base.py"]
 }
 ```
 
@@ -104,24 +225,22 @@ uv pip install -e .
 查询 Python 函数的内容和依赖关系。
 
 **参数:**
+
 - `project_root` (必需): Python 项目的根目录路径
 - `function_name` (必需): 要查询的函数名
 - `file_path` (可选): 函数所在的文件路径，用于精确定位
 - `host_class` (可选): 如果是类方法，指定所属的类名
 
 **返回示例:**
+
 ```json
 {
-    "node_type": "func",
-    "function_content": "def my_function():\n    return helper()",
-    "host_class": null,
-    "file_path": "/path/to/project/module.py",
-    "depends": [
-        "def helper():\n    ..."
-    ],
-    "depends_path": [
-        "/path/to/project/utils.py"
-    ]
+  "node_type": "func",
+  "function_content": "def my_function():\n    return helper()",
+  "host_class": null,
+  "file_path": "/path/to/project/module.py",
+  "depends": ["def helper():\n    ..."],
+  "depends_path": ["/path/to/project/utils.py"]
 }
 ```
 
@@ -130,6 +249,7 @@ uv pip install -e .
 列出项目或文件中的所有类和函数。
 
 **参数:**
+
 - `project_root` (必需): Python 项目的根目录路径
 - `file_path` (可选): 如果指定，只列出该文件中的符号
 
@@ -138,6 +258,7 @@ uv pip install -e .
 重建项目的符号索引。当项目文件发生变化后使用。
 
 **参数:**
+
 - `project_root` (必需): Python 项目的根目录路径
 
 ## 使用示例
@@ -185,11 +306,13 @@ uv pip install -e .
 ### 日志格式
 
 **控制台输出格式:**
+
 ```
 2025-12-09 09:51:14 | INFO     | py_symbol_analyze | 消息内容
 ```
 
 **文件日志格式（包含更多调试信息）:**
+
 ```
 2025-12-09 09:51:14 | INFO     | py_symbol_analyze | logger.py:84 | 消息内容
 ```
@@ -197,6 +320,7 @@ uv pip install -e .
 ### 日志级别
 
 默认日志级别为 INFO，记录以下内容：
+
 - 服务器启动/关闭
 - 工具调用请求
 - 索引构建进度
@@ -226,6 +350,7 @@ logger = setup_logger(
 ### 日志轮转
 
 日志文件支持自动轮转：
+
 - 单个文件最大 10MB
 - 最多保留 5 个备份文件
 - 超出后自动删除最旧的日志
@@ -236,6 +361,8 @@ logger = setup_logger(
 - **jedi**: 用于更精确的符号定义查找和类型推断
 - **pydantic**: 用于数据模型定义和验证
 - **MCP SDK**: 实现标准 MCP 协议
+- **Starlette + Uvicorn**: HTTP/SSE 传输支持
+- **SSE (Server-Sent Events)**: 流式传输协议
 
 ## 开发
 
@@ -266,4 +393,3 @@ py_symbol_analyze/
 ## 许可证
 
 MIT License
-

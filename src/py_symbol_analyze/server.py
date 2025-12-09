@@ -2,8 +2,12 @@
 MCP Server 主入口
 
 提供 Python 代码符号分析功能。
+支持两种传输方式：
+1. streamable-http - HTTP 流式传输（默认）
+2. stdio - 标准输入输出
 """
 
+import argparse
 import json
 from typing import Optional
 
@@ -21,6 +25,10 @@ from .resolver import SymbolAnalyzer
 
 # 获取日志记录器
 logger = get_logger("py_symbol_analyze.server")
+
+# 默认配置
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8000
 
 # 全局分析器实例
 _analyzer: Optional[SymbolAnalyzer] = None
@@ -353,9 +361,9 @@ async def handle_list_symbols(arguments: dict) -> list[TextContent]:
     ]
 
 
-async def run_server():
-    """运行 MCP Server"""
-    logger.info("正在启动 Python Symbol Analyzer MCP Server...")
+async def run_stdio_server():
+    """运行 stdio 模式的 MCP Server"""
+    logger.info("正在启动 Python Symbol Analyzer MCP Server (stdio 模式)...")
     async with stdio_server() as (read_stream, write_stream):
         logger.info("MCP Server 已启动，等待连接...")
         await server.run(
@@ -364,11 +372,177 @@ async def run_server():
     logger.info("MCP Server 已关闭")
 
 
+def create_starlette_app(
+    stateless: bool = False,
+):
+    """
+    创建 Starlette 应用，用于 HTTP 传输
+
+    Args:
+        stateless: 是否使用无状态模式（每个请求创建新的服务器实例）
+    """
+    from mcp.server.sse import SseServerTransport
+    from starlette.applications import Starlette
+    from starlette.middleware import Middleware
+    from starlette.middleware.cors import CORSMiddleware
+    from starlette.routing import Mount, Route
+
+    # SSE 传输
+    sse = SseServerTransport("/messages/")
+
+    async def handle_sse(request):
+        logger.info(f"收到 SSE 连接请求: {request.client}")
+        async with sse.connect_sse(
+            request.scope, request.receive, request._send
+        ) as streams:
+            await server.run(
+                streams[0], streams[1], server.create_initialization_options()
+            )
+
+    # 健康检查端点
+    async def health_check(request):
+        from starlette.responses import JSONResponse
+
+        return JSONResponse(
+            {
+                "status": "healthy",
+                "server": "py-symbol-analyze",
+                "transport": "streamable-http",
+            }
+        )
+
+    # 服务器信息端点
+    async def server_info(request):
+        from starlette.responses import JSONResponse
+
+        return JSONResponse(
+            {
+                "name": "py-symbol-analyze",
+                "version": "0.1.0",
+                "description": "Python Symbol Analyzer MCP Server",
+                "transport": "streamable-http",
+                "tools": [
+                    "query_class",
+                    "query_function",
+                    "list_symbols",
+                    "rebuild_index",
+                ],
+            }
+        )
+
+    # CORS 中间件配置
+    middleware = [
+        Middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    ]
+
+    # 创建 Starlette 应用
+    app = Starlette(
+        debug=True,
+        middleware=middleware,
+        routes=[
+            Route("/health", health_check, methods=["GET"]),
+            Route("/info", server_info, methods=["GET"]),
+            Route("/sse", handle_sse, methods=["GET"]),
+            Mount("/messages/", app=sse.handle_post_message),
+        ],
+    )
+
+    return app
+
+
+def run_http_server(
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    stateless: bool = False,
+):
+    """
+    运行 HTTP 模式的 MCP Server
+
+    Args:
+        host: 监听地址
+        port: 监听端口
+        stateless: 是否使用无状态模式
+    """
+    import uvicorn
+
+    logger.info("正在启动 Python Symbol Analyzer MCP Server (HTTP 模式)...")
+    logger.info(f"监听地址: http://{host}:{port}")
+    logger.info(f"SSE 端点: http://{host}:{port}/sse")
+    logger.info(f"健康检查: http://{host}:{port}/health")
+    logger.info(f"服务器信息: http://{host}:{port}/info")
+
+    app = create_starlette_app(stateless=stateless)
+    uvicorn.run(app, host=host, port=port, log_level="info")
+
+
 def main():
     """主入口点"""
     import asyncio
 
-    asyncio.run(run_server())
+    parser = argparse.ArgumentParser(
+        description="Python Symbol Analyzer MCP Server",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+  # 使用 HTTP 模式（默认）
+  py-symbol-analyze
+
+  # 指定端口
+  py-symbol-analyze --port 9000
+
+  # 指定地址和端口
+  py-symbol-analyze --host 0.0.0.0 --port 8080
+
+  # 使用 stdio 模式
+  py-symbol-analyze --transport stdio
+        """,
+    )
+
+    parser.add_argument(
+        "--transport",
+        "-t",
+        choices=["stdio", "http", "streamable-http"],
+        default="streamable-http",
+        help="传输方式: streamable-http/http (默认) 或 stdio",
+    )
+
+    parser.add_argument(
+        "--host",
+        "-H",
+        default=DEFAULT_HOST,
+        help=f"HTTP 模式监听地址 (默认: {DEFAULT_HOST})",
+    )
+
+    parser.add_argument(
+        "--port",
+        "-p",
+        type=int,
+        default=DEFAULT_PORT,
+        help=f"HTTP 模式监听端口 (默认: {DEFAULT_PORT})",
+    )
+
+    parser.add_argument(
+        "--stateless",
+        action="store_true",
+        help="使用无状态模式（每个请求创建新的服务器实例）",
+    )
+
+    args = parser.parse_args()
+
+    if args.transport == "stdio":
+        asyncio.run(run_stdio_server())
+    else:
+        run_http_server(
+            host=args.host,
+            port=args.port,
+            stateless=args.stateless,
+        )
 
 
 if __name__ == "__main__":
