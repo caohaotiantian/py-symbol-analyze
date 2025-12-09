@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "py-symbol-analyze"
+version = "0.1.0"
+description = "MCP Server for Python code symbol analysis using tree-sitter"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "Author", email = "author@example.com" }
+]
+dependencies = [
+    "mcp>=1.0.0",
+    "tree-sitter>=0.21.0",
+    "tree-sitter-python>=0.21.0",
+    "jedi>=0.19.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[project.scripts]
+py-symbol-analyze = "py_symbol_analyze.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/py_symbol_analyze"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+
+[tool.hatch.build.targets.sdist]
+include = ["src/py_symbol_analyze"]
+
