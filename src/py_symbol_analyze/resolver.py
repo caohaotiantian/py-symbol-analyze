@@ -96,8 +96,6 @@ class DependencyResolver:
         symbol_name: str,
         source_code: str,
         file_path: str,
-        line: int = 1,
-        column: int = 0,
     ) -> List[Tuple[str, str]]:
         """
         使用 jedi 解析符号定义位置
