@@ -36,6 +36,10 @@ class ParsedSymbol:
     callees: List[str] = field(default_factory=list)
     # 导入信息
     imports: Dict[str, str] = field(default_factory=dict)  # alias -> module.name
+    # 父类列表（仅对 class 类型有效）
+    base_classes: List[str] = field(default_factory=list)
+    # 是否调用了 super()（仅对 method 类型有效）
+    calls_super: bool = False
 
 
 class PythonParser:
@@ -134,20 +138,32 @@ class PythonParser:
         traverse(root)
         return imports
 
-    def extract_callees(self, node: Node, source_bytes: bytes) -> List[str]:
+    def extract_callees(
+        self, node: Node, source_bytes: bytes
+    ) -> Tuple[List[str], bool]:
         """
         从函数/方法/类体中提取调用的符号名称
+
+        Returns:
+            (callees_list, calls_super): 被调用的符号列表和是否调用了 super()
         """
         callees = set()
+        calls_super = False
 
         def traverse(n: Node):
+            nonlocal calls_super
+
             if n.type == "call":
                 # 获取被调用的函数/方法名
                 func_node = n.child_by_field_name("function")
                 if func_node:
                     if func_node.type == "identifier":
                         # 直接调用: foo()
-                        callees.add(self.get_node_text(func_node, source_bytes))
+                        func_name = self.get_node_text(func_node, source_bytes)
+                        callees.add(func_name)
+                        # 检测 super() 调用
+                        if func_name == "super":
+                            calls_super = True
                     elif func_node.type == "attribute":
                         # 属性调用: obj.method() 或 Class.method()
                         # 获取整个属性链
@@ -159,6 +175,17 @@ class PythonParser:
                         # 如果是 ClassName.method() 形式，添加类名
                         if len(parts) >= 2 and parts[0][0].isupper():
                             callees.add(parts[0])
+                        # 检测 super().method() 形式的调用
+                        # func_node 是 attribute 类型时，检查其 object 子节点
+                        obj_node = func_node.child_by_field_name("object")
+                        if obj_node and obj_node.type == "call":
+                            call_func = obj_node.child_by_field_name("function")
+                            if call_func and call_func.type == "identifier":
+                                if (
+                                    self.get_node_text(call_func, source_bytes)
+                                    == "super"
+                                ):
+                                    calls_super = True
 
             elif n.type == "identifier":
                 # 检查是否是类实例化或引用
@@ -177,7 +204,42 @@ class PythonParser:
                 traverse(child)
 
         traverse(node)
-        return list(callees)
+        return list(callees), calls_super
+
+    def extract_base_classes(self, node: Node, source_bytes: bytes) -> List[str]:
+        """
+        从类定义节点中提取父类列表
+
+        Args:
+            node: class_definition 节点
+            source_bytes: 源代码字节
+
+        Returns:
+            父类名称列表
+        """
+        base_classes = []
+
+        # 查找 argument_list（继承列表）
+        for child in node.children:
+            if child.type == "argument_list":
+                # 遍历继承列表中的所有参数
+                for arg in child.children:
+                    if arg.type == "identifier":
+                        # 简单继承: class Foo(Bar)
+                        base_classes.append(self.get_node_text(arg, source_bytes))
+                    elif arg.type == "attribute":
+                        # 模块.类继承: class Foo(module.Bar)
+                        attr_text = self.get_node_text(arg, source_bytes)
+                        base_classes.append(attr_text)
+                    elif arg.type == "call":
+                        # 泛型或特殊继承: class Foo(Generic[T])
+                        func_node = arg.child_by_field_name("function")
+                        if func_node:
+                            base_classes.append(
+                                self.get_node_text(func_node, source_bytes)
+                            )
+
+        return base_classes
 
     def find_classes(
         self, tree: Tree, source_bytes: bytes, file_path: str
@@ -192,7 +254,8 @@ class PythonParser:
                 if name_node:
                     name = self.get_node_text(name_node, source_bytes)
                     content = self.get_node_text(node, source_bytes)
-                    callees = self.extract_callees(node, source_bytes)
+                    callees, _ = self.extract_callees(node, source_bytes)
+                    base_classes = self.extract_base_classes(node, source_bytes)
 
                     classes.append(
                         ParsedSymbol(
@@ -206,6 +269,7 @@ class PythonParser:
                             file_path=file_path,
                             callees=callees,
                             imports=imports,
+                            base_classes=base_classes,
                         )
                     )
 
@@ -237,7 +301,7 @@ class PythonParser:
                 if name_node:
                     name = self.get_node_text(name_node, source_bytes)
                     content = self.get_node_text(node, source_bytes)
-                    callees = self.extract_callees(node, source_bytes)
+                    callees, calls_super = self.extract_callees(node, source_bytes)
 
                     functions.append(
                         ParsedSymbol(
@@ -252,6 +316,7 @@ class PythonParser:
                             host_class=current_class,
                             callees=callees,
                             imports=imports,
+                            calls_super=calls_super,
                         )
                     )
 
@@ -299,6 +364,8 @@ def _parsed_symbol_from_dict(data: Dict[str, Any]) -> ParsedSymbol:
         host_class=data.get("host_class"),
         callees=data.get("callees", []),
         imports=data.get("imports", {}),
+        base_classes=data.get("base_classes", []),
+        calls_super=data.get("calls_super", False),
     )
 
 

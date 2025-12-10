@@ -146,9 +146,24 @@ class SymbolCache:
                     host_class TEXT,
                     callees TEXT,
                     imports TEXT,
+                    base_classes TEXT,
+                    calls_super INTEGER DEFAULT 0,
                     UNIQUE(name, file_path, start_line, node_type)
                 )
             """)
+
+            # 尝试添加新列（用于升级旧数据库）
+            try:
+                cursor.execute("ALTER TABLE symbol_index ADD COLUMN base_classes TEXT")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            try:
+                cursor.execute(
+                    "ALTER TABLE symbol_index ADD COLUMN calls_super INTEGER DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                pass  # 列已存在
 
             # 创建索引以加速查询
             cursor.execute("""
@@ -255,6 +270,7 @@ class SymbolCache:
             symbol_data: 符号数据字典，包含以下字段：
                 - name, node_type, start_line, end_line, start_col, end_col
                 - content, file_path, host_class, callees, imports
+                - base_classes, calls_super
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -262,8 +278,9 @@ class SymbolCache:
                 """
                 INSERT OR REPLACE INTO symbol_index 
                 (name, node_type, start_line, end_line, start_col, end_col, 
-                 content, file_path, host_class, callees, imports)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 content, file_path, host_class, callees, imports,
+                 base_classes, calls_super)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     symbol_data["name"],
@@ -277,6 +294,8 @@ class SymbolCache:
                     symbol_data.get("host_class"),
                     json.dumps(symbol_data.get("callees", [])),
                     json.dumps(symbol_data.get("imports", {})),
+                    json.dumps(symbol_data.get("base_classes", [])),
+                    1 if symbol_data.get("calls_super", False) else 0,
                 ),
             )
             conn.commit()
@@ -292,8 +311,9 @@ class SymbolCache:
                 """
                 INSERT OR REPLACE INTO symbol_index 
                 (name, node_type, start_line, end_line, start_col, end_col, 
-                 content, file_path, host_class, callees, imports)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 content, file_path, host_class, callees, imports,
+                 base_classes, calls_super)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -308,6 +328,8 @@ class SymbolCache:
                         s.get("host_class"),
                         json.dumps(s.get("callees", [])),
                         json.dumps(s.get("imports", {})),
+                        json.dumps(s.get("base_classes", [])),
+                        1 if s.get("calls_super", False) else 0,
                     )
                     for s in symbols
                 ],
@@ -411,6 +433,10 @@ class SymbolCache:
 
     def _row_to_symbol_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         """将数据库行转换为符号字典"""
+        # 安全获取可能不存在的列（兼容旧数据库）
+        base_classes_raw = row["base_classes"] if "base_classes" in row.keys() else None
+        calls_super_raw = row["calls_super"] if "calls_super" in row.keys() else 0
+
         return {
             "name": row["name"],
             "node_type": row["node_type"],
@@ -423,6 +449,8 @@ class SymbolCache:
             "host_class": row["host_class"],
             "callees": json.loads(row["callees"]) if row["callees"] else [],
             "imports": json.loads(row["imports"]) if row["imports"] else {},
+            "base_classes": json.loads(base_classes_raw) if base_classes_raw else [],
+            "calls_super": bool(calls_super_raw),
         }
 
     # ==================== 元数据操作 ====================

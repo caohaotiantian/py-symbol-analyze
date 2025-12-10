@@ -211,10 +211,19 @@ class DependencyResolver:
         解析符号的所有依赖
 
         遍历符号的 callees，尝试找到每个被调用符号的定义。
+        如果是方法且调用了 super()，还会解析父类的依赖。
         """
         _get_logger().debug(f"解析符号依赖: {symbol.name}, callees: {symbol.callees}")
         dependencies = []
         seen_symbols = set()
+
+        # 如果是方法且调用了 super()，先解析父类依赖
+        if symbol.calls_super and symbol.host_class:
+            parent_deps = self._resolve_super_dependencies(symbol)
+            for dep in parent_deps:
+                if dep.name not in seen_symbols:
+                    seen_symbols.add(dep.name)
+                    dependencies.append(dep)
 
         for callee_name in symbol.callees:
             if callee_name in seen_symbols:
@@ -260,6 +269,63 @@ class DependencyResolver:
             dep = self._resolve_single_dependency(callee_name, symbol)
             if dep and dep.file_path:
                 dependencies.append(dep)
+
+        return dependencies
+
+    def _resolve_super_dependencies(
+        self, method_symbol: ParsedSymbol
+    ) -> List[Dependency]:
+        """
+        解析 super() 调用的父类依赖
+
+        当方法中调用了 super() 时，需要找到所属类的父类并添加到依赖中。
+
+        Args:
+            method_symbol: 调用了 super() 的方法符号
+
+        Returns:
+            父类依赖列表
+        """
+        dependencies = []
+
+        if not method_symbol.host_class:
+            return dependencies
+
+        # 查找所属类
+        host_class_symbol = self.project_parser.find_symbol(
+            method_symbol.host_class, symbol_type="class"
+        )
+        if not host_class_symbol:
+            _get_logger().debug(
+                f"未找到方法 {method_symbol.name} 的所属类 {method_symbol.host_class}"
+            )
+            return dependencies
+
+        # 遍历父类
+        for base_class_name in host_class_symbol.base_classes:
+            # 提取类名（处理 module.ClassName 格式）
+            simple_name = base_class_name.split(".")[-1]
+
+            # 跳过常见的内置基类
+            if simple_name in ("object", "ABC", "Generic", "Protocol"):
+                continue
+
+            _get_logger().debug(
+                f"解析父类依赖: {base_class_name} (来自 {method_symbol.host_class})"
+            )
+
+            # 尝试解析父类
+            dep = self._resolve_single_dependency(simple_name, host_class_symbol)
+            if dep and dep.file_path:
+                dependencies.append(dep)
+            else:
+                # 如果简单名称找不到，尝试用完整路径
+                if "." in base_class_name:
+                    dep = self._resolve_single_dependency(
+                        base_class_name, host_class_symbol
+                    )
+                    if dep and dep.file_path:
+                        dependencies.append(dep)
 
         return dependencies
 
