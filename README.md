@@ -7,7 +7,9 @@
 - **查询类信息**: 获取类的完整源代码及其依赖的其他类/函数
 - **查询函数信息**: 获取函数的完整源代码及其依赖（支持模块级函数和类方法）
 - **依赖分析**: 自动分析并返回符号所依赖的其他符号的完整内容
+- **父类依赖**: 自动解析 `super()` 调用，返回父类的完整内容
 - **符号索引**: 快速构建和查询项目级符号索引
+- **SQLite 缓存**: 使用 SQLite 持久化存储符号索引，提升查询性能
 
 ## 安装
 
@@ -36,6 +38,9 @@ py-symbol-analyze --port 9000
 
 # 指定地址和端口
 py-symbol-analyze --host 0.0.0.0 --port 8080
+
+# 指定缓存目录
+py-symbol-analyze --cache-dir /var/cache/py-symbol-analyze
 ```
 
 服务启动后，可以通过以下端点访问：
@@ -87,11 +92,14 @@ py-symbol-analyze --transport stdio
 ```
 usage: py-symbol-analyze [-h] [--transport {stdio,sse}]
                          [--host HOST] [--port PORT]
+                         [--log-dir LOG_DIR] [--cache-dir CACHE_DIR]
 
 参数:
   --transport, -t    传输方式: sse (默认) 或 stdio
   --host, -H         SSE 模式监听地址 (默认: 127.0.0.1)
   --port, -p         SSE 模式监听端口 (默认: 8000)
+  --log-dir, -l      日志文件存储目录 (默认: 当前目录下的 logs 文件夹)
+  --cache-dir, -c    符号缓存存储目录 (默认: 当前目录下的 cache 文件夹)
 ```
 
 ## 配置 MCP
@@ -119,26 +127,6 @@ py-symbol-analyze --port 8000
     }
   }
 }
-```
-
-#### 使用 Docker 运行
-
-```dockerfile
-FROM python:3.11-slim
-
-WORKDIR /app
-COPY . .
-RUN pip install -e .
-
-EXPOSE 8000
-CMD ["py-symbol-analyze", "--host", "0.0.0.0", "--port", "8000"]
-```
-
-构建并运行：
-
-```bash
-docker build -t py-symbol-analyze .
-docker run -p 8000:8000 py-symbol-analyze
 ```
 
 ### 方式二：stdio 模式配置
@@ -244,6 +232,8 @@ docker run -p 8000:8000 py-symbol-analyze
 }
 ```
 
+**注意:** 如果方法中调用了 `super().__init__()` 等父类方法，依赖中会自动包含父类的完整内容。
+
 ### 3. list_symbols
 
 列出项目或文件中的所有类和函数。
@@ -279,13 +269,55 @@ docker run -p 8000:8000 py-symbol-analyze
 - function_name: init_db_connections
 ```
 
-### 场景三：查询类方法的依赖
+### 场景三：查询类方法的依赖（包含父类）
 
 ```
 使用 query_function 工具:
 - project_root: /path/to/your/python/project
 - function_name: __init__
-- host_class: InterruptException
+- host_class: ChildClass
+```
+
+如果 `ChildClass.__init__` 中调用了 `super().__init__()`，返回结果的 `depends` 中会包含父类的完整内容。
+
+## 缓存配置
+
+符号索引使用 SQLite 数据库进行持久化存储，提升重复查询的性能。
+
+### 缓存文件位置
+
+默认缓存文件保存在**当前工作目录**下的 `cache/` 文件夹中，每个项目使用独立的数据库文件：
+
+```
+./cache/
+├── my_project_a1b2c3d4e5f6.db   # 项目 my_project 的缓存
+└── another_proj_f6e5d4c3b2a1.db # 项目 another_proj 的缓存
+```
+
+文件命名格式: `{项目名}_{项目路径MD5哈希}.db`
+
+### 自定义缓存目录
+
+可以通过命令行参数 `--cache-dir` 指定缓存存储目录：
+
+```bash
+# 指定缓存目录
+py-symbol-analyze --cache-dir /var/cache/py-symbol-analyze
+
+# 或者使用短参数
+py-symbol-analyze -c /tmp/my-cache
+```
+
+### 清空缓存
+
+如果需要清空缓存重建索引，可以：
+
+1. 删除缓存目录下的 `.db` 文件
+2. 或调用 `rebuild_index` 工具强制重建
+
+```bash
+# 删除所有缓存
+rm -rf cache/*.db
 ```
 
 ## 日志配置
@@ -300,6 +332,7 @@ docker run -p 8000:8000 py-symbol-analyze
 ./logs/
 ├── py_symbol_analyze.server_20251209.log   # 服务器日志
 ├── py_symbol_analyze.parser_20251209.log   # 解析器日志
+├── py_symbol_analyze.cache_20251209.log    # 缓存日志
 └── py_symbol_analyze.resolver_20251209.log # 依赖解析日志
 ```
 
@@ -373,6 +406,7 @@ logger = setup_logger(
 
 - **tree-sitter**: 用于快速、准确的 Python 语法解析
 - **jedi**: 用于更精确的符号定义查找和类型推断
+- **SQLite**: 用于持久化存储符号索引缓存
 - **pydantic**: 用于数据模型定义和验证
 - **MCP SDK**: 实现标准 MCP 协议
 - **Starlette + Uvicorn**: HTTP/SSE 传输支持
@@ -396,6 +430,7 @@ py_symbol_analyze/
 │       ├── server.py        # MCP Server 主入口
 │       ├── parser.py        # tree-sitter 解析器
 │       ├── resolver.py      # 符号解析和依赖分析
+│       ├── cache.py         # SQLite 缓存管理
 │       ├── models.py        # 数据模型定义
 │       └── logger.py        # 日志配置模块
 ├── tests/                   # 测试用例
@@ -403,7 +438,3 @@ py_symbol_analyze/
 ├── requirements.txt         # 依赖列表
 └── README.md               # 说明文档
 ```
-
-## 许可证
-
-MIT License
