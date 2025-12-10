@@ -42,6 +42,66 @@ class DependencyResolver:
             sys.path.insert(0, str(self.project_root))
         _get_logger().debug(f"初始化依赖解析器，项目路径: {self.project_root}")
 
+    def _is_valid_source_file(self, file_path: str) -> bool:
+        """
+        检查文件路径是否是有效的源代码文件
+
+        过滤掉：
+        - .pyi 类型存根文件
+        - 不在项目目录内的文件
+        - jedi 缓存目录中的文件
+        - typeshed 中的文件
+
+        Args:
+            file_path: 文件路径
+
+        Returns:
+            是否为有效的源代码文件
+        """
+        if not file_path:
+            return False
+
+        path = Path(file_path)
+
+        # 过滤 .pyi 文件
+        if path.suffix == ".pyi":
+            _get_logger().debug(f"过滤 .pyi 文件: {file_path}")
+            return False
+
+        # 过滤非 .py 文件
+        if path.suffix != ".py":
+            return False
+
+        # 过滤不存在的文件
+        if not path.exists():
+            return False
+
+        # 过滤不在项目目录内的文件
+        try:
+            path.resolve().relative_to(self.project_root)
+        except ValueError:
+            _get_logger().debug(f"过滤项目外文件: {file_path}")
+            return False
+
+        # 过滤常见的缓存/虚拟环境目录
+        path_str = str(path).lower()
+        excluded_patterns = [
+            ".cache",
+            "site-packages",
+            ".venv",
+            "venv",
+            "__pycache__",
+            ".tox",
+            ".eggs",
+            "typeshed",
+        ]
+        for pattern in excluded_patterns:
+            if pattern in path_str:
+                _get_logger().debug(f"过滤缓存/环境目录文件: {file_path}")
+                return False
+
+        return True
+
     def _resolve_import_path(
         self, import_path: str, current_file: str
     ) -> Optional[str]:
@@ -110,6 +170,8 @@ class DependencyResolver:
         """
         使用 jedi 解析符号定义位置
 
+        只返回项目内的有效 .py 源文件，过滤掉 .pyi 类型存根和项目外文件。
+
         Returns:
             List of (name, file_path) tuples
         """
@@ -129,8 +191,11 @@ class DependencyResolver:
                         definitions = script.goto(i, col)
                         for d in definitions:
                             if d.module_path:
-                                results.append((d.name, str(d.module_path)))
-                                break
+                                module_path_str = str(d.module_path)
+                                # 检查是否是有效的项目内源文件
+                                if self._is_valid_source_file(module_path_str):
+                                    results.append((d.name, module_path_str))
+                                    break
                     except Exception:
                         pass
                     if results:
@@ -231,17 +296,17 @@ class DependencyResolver:
                 host_class=found_symbol.host_class,
             )
 
-        # 使用 jedi 尝试解析
+        # 使用 jedi 尝试解析（已过滤 .pyi 和项目外文件）
         jedi_results = self._use_jedi_to_resolve(
             callee_name, context_symbol.content, context_symbol.file_path
         )
-        for name, file_path in jedi_results:
-            if file_path and Path(file_path).exists():
-                found_symbol = self._find_symbol_in_file(name, file_path)
+        for name, resolved_path in jedi_results:
+            if resolved_path and self._is_valid_source_file(resolved_path):
+                found_symbol = self._find_symbol_in_file(name, resolved_path)
                 if found_symbol:
                     return Dependency(
                         name=name,
-                        file_path=file_path,
+                        file_path=resolved_path,
                         content=found_symbol.content,
                         is_class=found_symbol.node_type == "class",
                         host_class=found_symbol.host_class,

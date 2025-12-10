@@ -44,3 +44,6 @@ htmlcov/
 *.manifest
 *.spec
 
+# cache
+cache/
+logs/
