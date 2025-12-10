@@ -3,13 +3,14 @@
 """
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import tree_sitter_python as tspython
 from tree_sitter import Language, Node, Parser, Tree
 
+from .cache import SymbolCache
 from .logger import get_logger
 
 
@@ -284,17 +285,45 @@ class PythonParser:
         return None
 
 
+def _parsed_symbol_from_dict(data: Dict[str, Any]) -> ParsedSymbol:
+    """从字典创建 ParsedSymbol 对象"""
+    return ParsedSymbol(
+        name=data["name"],
+        node_type=data["node_type"],
+        start_line=data["start_line"],
+        end_line=data["end_line"],
+        start_col=data["start_col"],
+        end_col=data["end_col"],
+        content=data["content"],
+        file_path=data["file_path"],
+        host_class=data.get("host_class"),
+        callees=data.get("callees", []),
+        imports=data.get("imports", {}),
+    )
+
+
+def _parsed_symbol_to_dict(symbol: ParsedSymbol) -> Dict[str, Any]:
+    """将 ParsedSymbol 对象转换为字典"""
+    return asdict(symbol)
+
+
 class ProjectParser:
     """项目级别的解析器"""
 
-    def __init__(self, project_root: str):
+    def __init__(self, project_root: str, db_path: Optional[str] = None):
+        """
+        初始化项目解析器
+
+        Args:
+            project_root: 项目根目录
+            db_path: 可选，SQLite 数据库文件路径
+        """
         self.project_root = Path(project_root).resolve()
         self.parser = PythonParser()
-        # 缓存：文件路径 -> (修改时间, 解析结果)
-        self._file_cache: Dict[str, Tuple[float, Tree, bytes]] = {}
-        # 符号索引：符号名 -> [ParsedSymbol, ...]
-        self._symbol_index: Dict[str, List[ParsedSymbol]] = {}
-        self._indexed = False
+        # 使用 SQLite 缓存
+        self._cache = SymbolCache(project_root, db_path)
+        # 内存中的 Tree 缓存（Tree 对象无法序列化，需要保持在内存中）
+        self._tree_cache: Dict[str, Tuple[float, Tree]] = {}
 
     def _get_python_files(self) -> List[Path]:
         """获取项目中所有 Python 文件"""
@@ -325,20 +354,47 @@ class ProjectParser:
     def _parse_file_cached(self, file_path: Path) -> Optional[Tuple[Tree, bytes]]:
         """带缓存的文件解析"""
         file_str = str(file_path)
-        mtime = file_path.stat().st_mtime if file_path.exists() else 0
 
-        if file_str in self._file_cache:
-            cached_mtime, tree, source_bytes = self._file_cache[file_str]
+        if not file_path.exists():
+            return None
+
+        mtime = file_path.stat().st_mtime
+
+        # 首先检查内存中的 Tree 缓存
+        if file_str in self._tree_cache:
+            cached_mtime, tree = self._tree_cache[file_str]
             if cached_mtime == mtime:
+                # 从 SQLite 获取源代码
+                cache_data = self._cache.get_file_cache(file_str)
+                if cache_data:
+                    _, _, source_code = cache_data
+                    return tree, bytes(source_code, "utf-8")
+
+        # 检查 SQLite 缓存
+        if self._cache.is_file_cache_valid(file_str, mtime):
+            cache_data = self._cache.get_file_cache(file_str)
+            if cache_data:
+                _, _, source_code = cache_data
+                source_bytes = bytes(source_code, "utf-8")
+                # 重新解析以获得 Tree 对象（Tree 无法序列化）
+                tree = self.parser.parser.parse(source_bytes)
+                self._tree_cache[file_str] = (mtime, tree)
+                _get_logger().debug(f"从 SQLite 缓存加载: {file_path}")
                 return tree, source_bytes
 
+        # 需要重新解析文件
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 source_code = f.read()
             source_bytes = bytes(source_code, "utf-8")
             tree = self.parser.parser.parse(source_bytes)
-            self._file_cache[file_str] = (mtime, tree, source_bytes)
-            _get_logger().debug(f"缓存解析结果: {file_path}")
+
+            # 保存到 SQLite 缓存
+            self._cache.set_file_cache(file_str, mtime, source_code)
+            # 保存 Tree 到内存缓存
+            self._tree_cache[file_str] = (mtime, tree)
+
+            _get_logger().debug(f"解析并缓存文件: {file_path}")
             return tree, source_bytes
         except Exception as e:
             _get_logger().error(f"解析文件失败 {file_path}: {e}")
@@ -346,17 +402,22 @@ class ProjectParser:
 
     def build_index(self, force: bool = False):
         """构建符号索引"""
-        if self._indexed and not force:
-            _get_logger().debug("使用已有索引")
+        if not force and self._cache.is_indexed():
+            _get_logger().debug("使用已有 SQLite 索引")
             return
 
         _get_logger().info(f"开始构建符号索引，项目路径: {self.project_root}")
-        self._symbol_index.clear()
+
+        # 清空现有符号索引
+        self._cache.clear_symbols()
+
         python_files = self._get_python_files()
         _get_logger().info(f"发现 {len(python_files)} 个 Python 文件")
 
         class_count = 0
         func_count = 0
+        batch_symbols: List[Dict[str, Any]] = []
+        batch_size = 100  # 批量写入的大小
 
         for file_path in python_files:
             result = self._parse_file_cached(file_path)
@@ -369,20 +430,25 @@ class ProjectParser:
             # 索引类
             classes = self.parser.find_classes(tree, source_bytes, file_str)
             for cls in classes:
-                if cls.name not in self._symbol_index:
-                    self._symbol_index[cls.name] = []
-                self._symbol_index[cls.name].append(cls)
+                batch_symbols.append(_parsed_symbol_to_dict(cls))
                 class_count += 1
 
             # 索引函数
             functions = self.parser.find_functions(tree, source_bytes, file_str)
             for func in functions:
-                if func.name not in self._symbol_index:
-                    self._symbol_index[func.name] = []
-                self._symbol_index[func.name].append(func)
+                batch_symbols.append(_parsed_symbol_to_dict(func))
                 func_count += 1
 
-        self._indexed = True
+            # 批量写入
+            if len(batch_symbols) >= batch_size:
+                self._cache.add_symbols_batch(batch_symbols)
+                batch_symbols = []
+
+        # 写入剩余的符号
+        if batch_symbols:
+            self._cache.add_symbols_batch(batch_symbols)
+
+        self._cache.set_indexed(True)
         _get_logger().info(f"索引构建完成: {class_count} 个类, {func_count} 个函数")
 
     def find_symbol(
@@ -401,38 +467,50 @@ class ProjectParser:
         """
         self.build_index()
 
-        candidates = self._symbol_index.get(name, [])
+        # 从 SQLite 缓存查询
+        results = self._cache.find_symbols_by_name(name, symbol_type, file_hint)
 
-        if symbol_type:
-            if symbol_type == "class":
-                candidates = [c for c in candidates if c.node_type == "class"]
-            elif symbol_type == "function":
-                candidates = [
-                    c for c in candidates if c.node_type in ("function", "method")
-                ]
-
-        if not candidates:
+        if not results:
             return None
 
-        # 如果有文件提示，优先返回该文件中的符号
-        if file_hint:
-            for c in candidates:
-                if file_hint in c.file_path:
-                    return c
-
-        # 返回第一个匹配
-        return candidates[0]
+        # 返回第一个匹配（已按 file_hint 排序）
+        return _parsed_symbol_from_dict(results[0])
 
     def find_all_symbols(self, name: str) -> List[ParsedSymbol]:
         """查找所有同名符号"""
         self.build_index()
-        return self._symbol_index.get(name, [])
+        results = self._cache.find_symbols_by_name(name)
+        return [_parsed_symbol_from_dict(r) for r in results]
 
     def get_file_symbols(
         self, file_path: str
     ) -> Tuple[List[ParsedSymbol], List[ParsedSymbol]]:
         """获取文件中的所有类和函数"""
         path = Path(file_path)
+
+        # 检查文件是否存在
+        if not path.exists():
+            return [], []
+
+        mtime = path.stat().st_mtime
+
+        # 如果文件缓存有效，优先从 SQLite 获取
+        if self._cache.is_file_cache_valid(str(path), mtime):
+            symbols = self._cache.find_symbols_by_file(str(path))
+            if symbols:
+                classes = [
+                    _parsed_symbol_from_dict(s)
+                    for s in symbols
+                    if s["node_type"] == "class"
+                ]
+                functions = [
+                    _parsed_symbol_from_dict(s)
+                    for s in symbols
+                    if s["node_type"] in ("function", "method")
+                ]
+                return classes, functions
+
+        # 需要重新解析文件
         result = self._parse_file_cached(path)
         if not result:
             return [], []
@@ -440,4 +518,44 @@ class ProjectParser:
         tree, source_bytes = result
         classes = self.parser.find_classes(tree, source_bytes, file_path)
         functions = self.parser.find_functions(tree, source_bytes, file_path)
+
+        # 更新 SQLite 缓存中的符号
+        self._cache.remove_symbols_by_file(file_path)
+        symbols_to_cache = [_parsed_symbol_to_dict(s) for s in classes + functions]
+        if symbols_to_cache:
+            self._cache.add_symbols_batch(symbols_to_cache)
+
         return classes, functions
+
+    def invalidate_file(self, file_path: str):
+        """
+        使文件缓存失效
+
+        当文件被修改时调用此方法。
+        """
+        self._cache.remove_file_cache(file_path)
+        self._cache.remove_symbols_by_file(file_path)
+        # 清除内存中的 Tree 缓存
+        if file_path in self._tree_cache:
+            del self._tree_cache[file_path]
+        _get_logger().debug(f"已使文件缓存失效: {file_path}")
+
+    def clear_cache(self):
+        """清空所有缓存"""
+        self._cache.clear_all()
+        self._tree_cache.clear()
+        _get_logger().info("已清空所有缓存")
+
+    def get_all_symbols(self, symbol_type: Optional[str] = None) -> List[ParsedSymbol]:
+        """
+        获取项目中的所有符号
+
+        Args:
+            symbol_type: 可选，"class" 或 "function"
+
+        Returns:
+            ParsedSymbol 列表
+        """
+        self.build_index()
+        results = self._cache.get_all_symbols(symbol_type)
+        return [_parsed_symbol_from_dict(r) for r in results]

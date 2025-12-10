@@ -155,12 +155,12 @@ class TestProjectParser:
         parser = ProjectParser(temp_project)
         parser.build_index()
 
-        # 检查索引是否包含预期的符号
-        assert "MyClass" in parser._symbol_index
-        assert "HelperClass" in parser._symbol_index
-        assert "standalone_function" in parser._symbol_index
-        assert "helper_func" in parser._symbol_index
-        assert "BaseClass" in parser._symbol_index
+        # 检查索引是否包含预期的符号（通过 find_symbol 验证）
+        assert parser.find_symbol("MyClass") is not None
+        assert parser.find_symbol("HelperClass") is not None
+        assert parser.find_symbol("standalone_function") is not None
+        assert parser.find_symbol("helper_func") is not None
+        assert parser.find_symbol("BaseClass") is not None
 
     def test_find_symbol(self, temp_project):
         """测试查找符号"""

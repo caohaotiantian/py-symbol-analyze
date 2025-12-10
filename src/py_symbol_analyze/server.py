@@ -330,27 +330,22 @@ async def handle_list_symbols(arguments: dict) -> list[TextContent]:
         }
     else:
         # 列出整个项目的符号
-        analyzer.resolver.project_parser.build_index()
-        index = analyzer.resolver.project_parser._symbol_index
+        class_symbols = analyzer.resolver.project_parser.get_all_symbols("class")
+        func_symbols = analyzer.resolver.project_parser.get_all_symbols("function")
 
-        classes = []
-        functions = []
-
-        for name, symbols in index.items():
-            for s in symbols:
-                if s.node_type == "class":
-                    classes.append(
-                        {"name": s.name, "file_path": s.file_path, "line": s.start_line}
-                    )
-                else:
-                    functions.append(
-                        {
-                            "name": s.name,
-                            "file_path": s.file_path,
-                            "line": s.start_line,
-                            "host_class": s.host_class,
-                        }
-                    )
+        classes = [
+            {"name": s.name, "file_path": s.file_path, "line": s.start_line}
+            for s in class_symbols
+        ]
+        functions = [
+            {
+                "name": s.name,
+                "file_path": s.file_path,
+                "line": s.start_line,
+                "host_class": s.host_class,
+            }
+            for s in func_symbols
+        ]
 
         result = {
             "project_root": project_root,

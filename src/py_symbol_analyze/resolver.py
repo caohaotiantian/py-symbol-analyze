@@ -431,3 +431,15 @@ class SymbolAnalyzer:
     def rebuild_index(self):
         """重建符号索引"""
         self.resolver.project_parser.build_index(force=True)
+
+    def clear_cache(self):
+        """清空所有缓存（包括 SQLite 缓存）"""
+        self.resolver.project_parser.clear_cache()
+
+    def invalidate_file(self, file_path: str):
+        """
+        使指定文件的缓存失效
+
+        当文件被修改时调用此方法。
+        """
+        self.resolver.project_parser.invalidate_file(file_path)
