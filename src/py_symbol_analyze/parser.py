@@ -310,18 +310,24 @@ def _parsed_symbol_to_dict(symbol: ParsedSymbol) -> Dict[str, Any]:
 class ProjectParser:
     """项目级别的解析器"""
 
-    def __init__(self, project_root: str, db_path: Optional[str] = None):
+    def __init__(
+        self,
+        project_root: str,
+        cache_dir: Optional[str] = None,
+        db_path: Optional[str] = None,
+    ):
         """
         初始化项目解析器
 
         Args:
             project_root: 项目根目录
-            db_path: 可选，SQLite 数据库文件路径
+            cache_dir: 可选，缓存目录路径
+            db_path: 可选，SQLite 数据库文件完整路径（如果指定则忽略 cache_dir）
         """
         self.project_root = Path(project_root).resolve()
         self.parser = PythonParser()
         # 使用 SQLite 缓存
-        self._cache = SymbolCache(project_root, db_path)
+        self._cache = SymbolCache(project_root, cache_dir=cache_dir, db_path=db_path)
         # 内存中的 Tree 缓存（Tree 对象无法序列化，需要保持在内存中）
         self._tree_cache: Dict[str, Tuple[float, Tree]] = {}
 

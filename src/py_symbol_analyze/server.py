@@ -20,6 +20,7 @@ from mcp.types import (
     Tool,
 )
 
+from .cache import set_cache_dir
 from .logger import get_logger, set_log_dir
 from .resolver import SymbolAnalyzer
 
@@ -29,6 +30,8 @@ DEFAULT_PORT = 8000
 
 # 全局分析器实例
 _analyzer: Optional[SymbolAnalyzer] = None
+# 全局缓存目录
+_cache_dir: Optional[str] = None
 
 
 def _get_logger():
@@ -36,12 +39,27 @@ def _get_logger():
     return get_logger("py_symbol_analyze.server")
 
 
+def set_global_cache_dir(cache_dir: Optional[str]) -> str:
+    """
+    设置全局缓存目录
+
+    Args:
+        cache_dir: 缓存目录路径
+
+    Returns:
+        实际使用的缓存目录路径
+    """
+    global _cache_dir
+    _cache_dir = set_cache_dir(cache_dir)
+    return _cache_dir
+
+
 def get_analyzer(project_root: str) -> SymbolAnalyzer:
     """获取或创建分析器实例"""
-    global _analyzer
+    global _analyzer, _cache_dir
     if _analyzer is None or _analyzer.project_root != project_root:
         _get_logger().info(f"创建新的分析器实例，项目路径: {project_root}")
-        _analyzer = SymbolAnalyzer(project_root)
+        _analyzer = SymbolAnalyzer(project_root, cache_dir=_cache_dir)
     return _analyzer
 
 
@@ -495,6 +513,9 @@ def main():
   # 指定日志目录
   py-symbol-analyze --log-dir /var/log/py-symbol-analyze
 
+  # 指定缓存目录
+  py-symbol-analyze --cache-dir /var/cache/py-symbol-analyze
+
   # 使用 stdio 模式
   py-symbol-analyze --transport stdio
         """,
@@ -530,11 +551,22 @@ def main():
         help="日志文件存储目录 (默认: 当前目录下的 logs 文件夹)",
     )
 
+    parser.add_argument(
+        "--cache-dir",
+        "-c",
+        default=None,
+        help="符号缓存存储目录 (默认: 当前目录下的 cache 文件夹)",
+    )
+
     args = parser.parse_args()
 
     # 设置日志目录（必须在获取 logger 之前）
     log_dir = set_log_dir(args.log_dir)
     _get_logger().info(f"日志目录: {log_dir}")
+
+    # 设置缓存目录
+    cache_dir = set_global_cache_dir(args.cache_dir)
+    _get_logger().info(f"缓存目录: {cache_dir}")
 
     if args.transport == "stdio":
         asyncio.run(run_stdio_server())

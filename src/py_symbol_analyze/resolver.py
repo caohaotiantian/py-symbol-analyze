@@ -27,9 +27,16 @@ def _get_logger():
 class DependencyResolver:
     """依赖解析器"""
 
-    def __init__(self, project_root: str):
+    def __init__(self, project_root: str, cache_dir: Optional[str] = None):
+        """
+        初始化依赖解析器
+
+        Args:
+            project_root: 项目根目录
+            cache_dir: 可选，缓存目录路径
+        """
         self.project_root = Path(project_root).resolve()
-        self.project_parser = ProjectParser(project_root)
+        self.project_parser = ProjectParser(project_root, cache_dir=cache_dir)
         # 添加项目路径到 sys.path 以便 jedi 能正确解析
         if str(self.project_root) not in sys.path:
             sys.path.insert(0, str(self.project_root))
@@ -383,9 +390,17 @@ class SymbolAnalyzer:
     符号分析器 - 对外暴露的主要接口
     """
 
-    def __init__(self, project_root: str):
+    def __init__(self, project_root: str, cache_dir: Optional[str] = None):
+        """
+        初始化符号分析器
+
+        Args:
+            project_root: 项目根目录
+            cache_dir: 可选，缓存目录路径
+        """
         self.project_root = project_root
-        self.resolver = DependencyResolver(project_root)
+        self.cache_dir = cache_dir
+        self.resolver = DependencyResolver(project_root, cache_dir=cache_dir)
         _get_logger().info(f"符号分析器初始化完成，项目路径: {project_root}")
 
     def query_class(

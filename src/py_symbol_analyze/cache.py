@@ -19,22 +19,99 @@ def _get_logger():
     return get_logger("py_symbol_analyze.cache")
 
 
+# 全局缓存目录配置
+_cache_dir: Optional[str] = None
+
+
+def set_cache_dir(cache_dir: Optional[str]) -> str:
+    """
+    设置全局缓存目录
+
+    Args:
+        cache_dir: 缓存目录路径，如果为 None 则使用默认路径（当前目录下的 cache 文件夹）
+
+    Returns:
+        实际使用的缓存目录路径
+    """
+    global _cache_dir
+    if cache_dir:
+        _cache_dir = str(Path(cache_dir).resolve())
+    else:
+        _cache_dir = str(Path.cwd() / "cache")
+
+    # 确保缓存目录存在
+    Path(_cache_dir).mkdir(parents=True, exist_ok=True)
+    _get_logger().info(f"缓存目录: {_cache_dir}")
+    return _cache_dir
+
+
+def get_cache_dir() -> str:
+    """
+    获取全局缓存目录
+
+    Returns:
+        缓存目录路径
+    """
+    global _cache_dir
+    if _cache_dir is None:
+        _cache_dir = str(Path.cwd() / "cache")
+        Path(_cache_dir).mkdir(parents=True, exist_ok=True)
+    return _cache_dir
+
+
+def generate_cache_filename(project_root: str) -> str:
+    """
+    根据项目路径生成缓存文件名
+
+    格式: {项目名}_{项目绝对路径的md5值}.db
+
+    Args:
+        project_root: 项目根目录
+
+    Returns:
+        缓存文件名
+    """
+    project_path = Path(project_root).resolve()
+    project_name = project_path.name
+    path_hash = hashlib.md5(str(project_path).encode("utf-8")).hexdigest()[:12]
+    return f"{project_name}_{path_hash}.db"
+
+
 class SymbolCache:
     """符号缓存管理器 - 使用 SQLite3 进行持久化存储"""
 
-    def __init__(self, project_root: str, db_path: Optional[str] = None):
+    def __init__(
+        self,
+        project_root: str,
+        cache_dir: Optional[str] = None,
+        db_path: Optional[str] = None,
+    ):
         """
         初始化缓存管理器
 
         Args:
             project_root: 项目根目录
-            db_path: 数据库文件路径，默认为项目根目录下的 .py_symbol_cache.db
+            cache_dir: 缓存目录路径，如果为 None 则使用全局缓存目录
+            db_path: 数据库文件完整路径，如果指定则忽略 cache_dir
         """
         self.project_root = Path(project_root).resolve()
+
         if db_path:
+            # 直接指定数据库路径
             self.db_path = Path(db_path)
         else:
-            self.db_path = self.project_root / ".py_symbol_cache.db"
+            # 使用缓存目录 + 生成的文件名
+            if cache_dir:
+                cache_directory = Path(cache_dir)
+            else:
+                cache_directory = Path(get_cache_dir())
+
+            # 确保缓存目录存在
+            cache_directory.mkdir(parents=True, exist_ok=True)
+
+            # 生成缓存文件名
+            cache_filename = generate_cache_filename(project_root)
+            self.db_path = cache_directory / cache_filename
 
         self._init_db()
         _get_logger().debug(f"初始化 SQLite 缓存: {self.db_path}")
