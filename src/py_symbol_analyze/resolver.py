@@ -333,9 +333,10 @@ class DependencyResolver:
         self, callee_name: str, context_symbol: ParsedSymbol
     ) -> Optional[Dependency]:
         """解析单个依赖"""
-        # 首先检查导入信息（这是最准确的方式）
-        if callee_name in context_symbol.imports:
-            import_path = context_symbol.imports[callee_name]
+        import_path = context_symbol.imports.get(callee_name)
+
+        # 1. 首先检查导入信息（这是最准确的方式）
+        if import_path:
             file_path = self._resolve_import_path(import_path, context_symbol.file_path)
 
             if file_path:
@@ -351,15 +352,26 @@ class DependencyResolver:
                         host_class=found_symbol.host_class,
                     )
 
-            # 如果有导入信息但解析失败，不进行全局查找（避免误报）
-            # 因为导入路径明确指定了模块位置，全局查找可能返回错误的同名符号
+            # 导入路径解析失败，尝试使用导入路径信息进行更精确的全局查找
             _get_logger().debug(
-                f"导入路径 {import_path} 解析失败，跳过全局查找以避免误报"
+                f"导入路径 {import_path} 直接解析失败，尝试带路径提示的全局查找"
             )
-            return None
+            # 将导入路径转换为文件路径提示（如 a.b.c.DBUtil -> a/b/c）
+            path_parts = import_path.split(".")[:-1]  # 去掉最后的类/函数名
+            path_hint = "/".join(path_parts) if path_parts else None
 
-        # 只有当没有导入信息时，才尝试在同文件或项目中查找
-        # 首先检查是否在同一文件中定义
+            found_symbol = self._find_symbol_with_path_hint(callee_name, path_hint)
+            if found_symbol:
+                return Dependency(
+                    name=callee_name,
+                    qualified_name=import_path,
+                    file_path=found_symbol.file_path,
+                    content=found_symbol.content,
+                    is_class=found_symbol.node_type == "class",
+                    host_class=found_symbol.host_class,
+                )
+
+        # 2. 检查是否在同一文件中定义
         found_symbol = self._find_symbol_in_file(callee_name, context_symbol.file_path)
         if found_symbol:
             return Dependency(
@@ -370,7 +382,19 @@ class DependencyResolver:
                 host_class=found_symbol.host_class,
             )
 
-        # 使用 jedi 尝试解析（已过滤 .pyi 和项目外文件）
+        # 3. 如果没有导入信息，尝试全局查找
+        if not import_path:
+            found_symbol = self.project_parser.find_symbol(callee_name)
+            if found_symbol:
+                return Dependency(
+                    name=callee_name,
+                    file_path=found_symbol.file_path,
+                    content=found_symbol.content,
+                    is_class=found_symbol.node_type == "class",
+                    host_class=found_symbol.host_class,
+                )
+
+        # 4. 使用 jedi 尝试解析（已过滤 .pyi 和项目外文件）
         jedi_results = self._use_jedi_to_resolve(
             callee_name, context_symbol.content, context_symbol.file_path
         )
@@ -387,6 +411,35 @@ class DependencyResolver:
                     )
 
         return None
+
+    def _find_symbol_with_path_hint(
+        self, symbol_name: str, path_hint: Optional[str]
+    ) -> Optional[ParsedSymbol]:
+        """
+        使用路径提示查找符号
+
+        当导入路径解析失败时，使用导入路径作为提示来过滤同名符号。
+
+        Args:
+            symbol_name: 符号名称
+            path_hint: 路径提示（如 "a/b/c"），用于过滤文件路径
+
+        Returns:
+            匹配的符号，如果没有找到则返回 None
+        """
+        candidates = self.project_parser.find_all_symbols(symbol_name)
+
+        if not candidates:
+            return None
+
+        # 如果有路径提示，优先返回文件路径匹配的符号
+        if path_hint:
+            for candidate in candidates:
+                if path_hint in candidate.file_path:
+                    return candidate
+
+        # 如果没有路径提示或没有匹配，返回第一个
+        return candidates[0]
 
     def _find_symbol_in_file(
         self, symbol_name: str, file_path: str
