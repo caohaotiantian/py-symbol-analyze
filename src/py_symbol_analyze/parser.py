@@ -159,6 +159,34 @@ class PythonParser:
         callees = set()
         calls_super = False
 
+        def extract_attribute_root(attr_node: Node) -> Optional[str]:
+            """
+            从 attribute 节点提取根对象名称
+
+            如 ddd.xxx.yyy -> 返回 'ddd'
+            如 self.xxx -> 返回 None (跳过 self/cls)
+            """
+            # 递归找到最左边的 identifier
+            current = attr_node
+            while current.type == "attribute":
+                obj = current.child_by_field_name("object")
+                if obj:
+                    current = obj
+                else:
+                    break
+
+            if current.type == "identifier":
+                name = self.get_node_text(current, source_bytes)
+                if name not in ("self", "cls"):
+                    return name
+            elif current.type == "call":
+                # 处理 super().xxx 这种情况
+                func = current.child_by_field_name("function")
+                if func and func.type == "identifier":
+                    return self.get_node_text(func, source_bytes)
+
+            return None
+
         def traverse(n: Node):
             nonlocal calls_super
 
@@ -175,26 +203,37 @@ class PythonParser:
                             calls_super = True
                     elif func_node.type == "attribute":
                         # 属性调用: obj.method() 或 Class.method()
-                        # 获取整个属性链
-                        attr_text = self.get_node_text(func_node, source_bytes)
-                        parts = attr_text.split(".")
-                        # 添加第一个部分（可能是类名或实例名）
-                        if parts[0] not in ("self", "cls"):
-                            callees.add(parts[0])
-                        # 如果是 ClassName.method() 形式，添加类名
-                        if len(parts) >= 2 and parts[0][0].isupper():
-                            callees.add(parts[0])
-                        # 检测 super().method() 形式的调用
-                        # func_node 是 attribute 类型时，检查其 object 子节点
-                        obj_node = func_node.child_by_field_name("object")
-                        if obj_node and obj_node.type == "call":
-                            call_func = obj_node.child_by_field_name("function")
-                            if call_func and call_func.type == "identifier":
-                                if (
-                                    self.get_node_text(call_func, source_bytes)
-                                    == "super"
-                                ):
-                                    calls_super = True
+                        root_name = extract_attribute_root(func_node)
+                        if root_name:
+                            callees.add(root_name)
+                            if root_name == "super":
+                                calls_super = True
+
+            elif n.type == "attribute":
+                # 处理属性访问: ddd.xxx 作为参数或赋值值
+                # 检查父节点，确保不是 call 的 function 部分（那部分已经处理了）
+                parent = n.parent
+                if parent and parent.type != "attribute":
+                    # 不是嵌套的 attribute，检查是否是有意义的上下文
+                    if parent.type in (
+                        "argument_list",
+                        "assignment",
+                        "expression_statement",
+                        "return_statement",
+                        "yield",
+                        "comparison_operator",
+                        "binary_operator",
+                        "boolean_operator",
+                        "conditional_expression",
+                        "tuple",
+                        "list",
+                        "dictionary",
+                        "set",
+                        "subscript",
+                    ):
+                        root_name = extract_attribute_root(n)
+                        if root_name and root_name != "super":
+                            callees.add(root_name)
 
             elif n.type == "identifier":
                 # 检查是否是类实例化或引用
@@ -206,7 +245,7 @@ class PythonParser:
                 ):
                     name = self.get_node_text(n, source_bytes)
                     # 首字母大写通常是类名
-                    if name[0].isupper() if name else False:
+                    if name and name[0].isupper():
                         callees.add(name)
 
             for child in n.children:
