@@ -336,9 +336,44 @@ class DependencyResolver:
     ) -> Optional[Dependency]:
         """解析单个依赖"""
         import_path = context_symbol.imports.get(callee_name)
+        is_prefix_match = False  # 标记是否通过前缀匹配找到的导入
+
+        # 如果直接查找失败，尝试查找以 callee_name 开头的导入
+        # 这处理 import a.b 和 import a.c 这种情况，其中 callee_name 可能是 'a' 或 'a.b'
+        if not import_path:
+            prefix = callee_name + "."
+            for key, value in context_symbol.imports.items():
+                if key.startswith(prefix) or key == callee_name:
+                    import_path = value
+                    is_prefix_match = True
+                    break
 
         # 1. 首先检查导入信息（这是最准确的方式）
         if import_path:
+            # 当通过前缀匹配找到更长的导入路径时（如 callee_name='a' 或 'a.b' 匹配 'a.b.c.target'），
+            # 应该优先尝试解析 callee_name 对应的模块，而不是更长的导入路径
+            # 因为 `import a.b.c.target` 会隐式导入 `a`, `a.b`, `a.b.c`
+            if is_prefix_match and import_path.startswith(callee_name + "."):
+                # callee_name 是 import_path 的前缀，尝试解析 callee_name 对应的模块
+                callee_file_path = self._resolve_import_path(
+                    callee_name, context_symbol.file_path
+                )
+                if callee_file_path:
+                    try:
+                        with open(callee_file_path, "r", encoding="utf-8") as f:
+                            content = f.read()
+                    except Exception:
+                        content = f"# Module: {callee_name}"
+
+                    return Dependency(
+                        name=callee_name,
+                        qualified_name=callee_name,
+                        file_path=callee_file_path,
+                        content=content,
+                        is_class=False,
+                        host_class=None,
+                    )
+
             file_path = self._resolve_import_path(import_path, context_symbol.file_path)
 
             if file_path:
@@ -352,6 +387,25 @@ class DependencyResolver:
                         content=found_symbol.content,
                         is_class=found_symbol.node_type == "class",
                         host_class=found_symbol.host_class,
+                    )
+
+                # 对于直接匹配的导入（import_path == callee_name），返回模块文件作为依赖
+                # 注意：只处理精确匹配，不处理前缀匹配（前缀匹配在上面已处理）
+                if import_path == callee_name:
+                    # 这是一个模块导入，返回模块文件
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            content = f.read()
+                    except Exception:
+                        content = f"# Module: {import_path}"
+
+                    return Dependency(
+                        name=import_path,
+                        qualified_name=import_path,
+                        file_path=file_path,
+                        content=content,
+                        is_class=False,
+                        host_class=None,
                     )
 
             # 导入路径解析失败，尝试使用导入路径信息进行更精确的全局查找
@@ -532,7 +586,8 @@ class DependencyResolver:
         depends_path = []
 
         for dep in dependencies:
-            if dep.content and dep.file_path:
+            # 只检查 file_path 是否存在，空内容也是有效的依赖
+            if dep.file_path:
                 # 如果依赖是方法，获取其所属类的完整内容
                 if dep.host_class:
                     host_class_symbol = self._find_symbol_in_file(
@@ -542,10 +597,10 @@ class DependencyResolver:
                         depends.append(host_class_symbol.content)
                         depends_path.append(dep.file_path)
                     else:
-                        depends.append(dep.content)
+                        depends.append(dep.content or "")
                         depends_path.append(dep.file_path)
                 else:
-                    depends.append(dep.content)
+                    depends.append(dep.content or "")
                     depends_path.append(dep.file_path)
 
         return ClassAnalysisResult(
@@ -597,7 +652,8 @@ class DependencyResolver:
         depends_path = []
 
         for dep in dependencies:
-            if dep.content and dep.file_path:
+            # 只检查 file_path 是否存在，空内容也是有效的依赖
+            if dep.file_path:
                 # 如果依赖是方法，获取其所属类的完整内容
                 if dep.host_class:
                     host_class_symbol = self._find_symbol_in_file(
@@ -607,10 +663,10 @@ class DependencyResolver:
                         depends.append(host_class_symbol.content)
                         depends_path.append(dep.file_path)
                     else:
-                        depends.append(dep.content)
+                        depends.append(dep.content or "")
                         depends_path.append(dep.file_path)
                 else:
-                    depends.append(dep.content)
+                    depends.append(dep.content or "")
                     depends_path.append(dep.file_path)
 
         return FunctionAnalysisResult(

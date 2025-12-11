@@ -336,6 +336,191 @@ class TestImportResolution:
 class TestSameNameClassResolution:
     """测试同名类在不同模块下的解析"""
 
+    def test_parent_module_attribute_access(self):
+        """
+        测试访问父模块属性的情况
+        当有 import a.b 和 import a.c，访问 a.CONSTANT 应该解析到 a/__init__.py
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 创建 a/__init__.py（包含 CONSTANT）
+            a_dir = Path(tmpdir) / "a"
+            a_dir.mkdir(parents=True)
+            (a_dir / "__init__.py").write_text('CONSTANT = "from a"')
+            (a_dir / "b.py").write_text("def func_b():\n    pass")
+            (a_dir / "c.py").write_text("def func_c():\n    pass")
+
+            # main.py 导入子模块但访问父模块属性
+            (Path(tmpdir) / "main.py").write_text(
+                """
+import a.b
+import a.c
+
+class MyClass:
+    def method(self):
+        x = a.CONSTANT
+"""
+            )
+
+            resolver = DependencyResolver(tmpdir)
+            result = resolver.analyze_class("MyClass")
+
+            assert result is not None
+            assert len(result.depends_path) > 0
+
+            # 应该解析到 a/__init__.py，而不是 a/b.py 或 a/c.py
+            has_init = any("__init__.py" in p for p in result.depends_path)
+            has_wrong = any(
+                ("b.py" in p or "c.py" in p) and "__init__" not in p
+                for p in result.depends_path
+            )
+
+            assert has_init, (
+                f"Should resolve to a/__init__.py, got: {result.depends_path}"
+            )
+            assert not has_wrong, (
+                f"Should NOT resolve to b.py or c.py, got: {result.depends_path}"
+            )
+
+    def test_multiple_imports_same_prefix(self):
+        """
+        测试多个导入共享相同前缀的情况（import a.b 和 import a.c）
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 创建 a/b.py 和 a/c.py
+            a_dir = Path(tmpdir) / "a"
+            a_dir.mkdir(parents=True)
+            (a_dir / "__init__.py").write_text("")
+            (a_dir / "b.py").write_text('def func_b():\n    """a.b"""\n    pass')
+            (a_dir / "c.py").write_text('def func_c():\n    """a.c"""\n    pass')
+
+            # main.py 同时导入 a.b 和 a.c
+            (Path(tmpdir) / "main.py").write_text(
+                """
+import a.b
+import a.c
+
+class MyClass:
+    def method(self):
+        a.b.func_b()
+        a.c.func_c()
+"""
+            )
+
+            resolver = DependencyResolver(tmpdir)
+            result = resolver.analyze_class("MyClass")
+
+            assert result is not None
+            assert len(result.depends_path) >= 2
+
+            # 两个模块都应该被识别
+            has_ab = any("a/b.py" in p or "a\\b.py" in p for p in result.depends_path)
+            has_ac = any("a/c.py" in p or "a\\c.py" in p for p in result.depends_path)
+
+            assert has_ab, f"a.b should be in depends_path, got: {result.depends_path}"
+            assert has_ac, f"a.c should be in depends_path, got: {result.depends_path}"
+
+    def test_intermediate_module_access(self):
+        """
+        测试访问中间模块的情况
+        当有 import a.b.c.target，调用 a.b.method() 应该解析到 a/b/__init__.py
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 创建 a/b/__init__.py（包含 method）
+            a_dir = Path(tmpdir) / "a"
+            a_dir.mkdir(parents=True)
+            (a_dir / "__init__.py").write_text("")
+
+            ab_dir = a_dir / "b"
+            ab_dir.mkdir(parents=True)
+            (ab_dir / "__init__.py").write_text(
+                'def method():\n    """a.b.method"""\n    pass'
+            )
+
+            abc_dir = ab_dir / "c"
+            abc_dir.mkdir(parents=True)
+            (abc_dir / "__init__.py").write_text("")
+            (abc_dir / "target.py").write_text("class Target:\n    pass")
+
+            # main.py 导入 a.b.c.target 但访问 a.b.method()
+            (Path(tmpdir) / "main.py").write_text(
+                """
+import a.b.c.target
+
+class MyClass:
+    def test(self):
+        a.b.method()
+"""
+            )
+
+            resolver = DependencyResolver(tmpdir)
+            result = resolver.analyze_class("MyClass")
+
+            assert result is not None
+            assert len(result.depends_path) > 0
+
+            # 应该解析到 a/b/__init__.py，而不是 a/b/c/target.py
+            has_ab_init = any(
+                "a/b/__init__.py" in p or "a\\b\\__init__.py" in p
+                for p in result.depends_path
+            )
+            has_wrong = any("target.py" in p for p in result.depends_path)
+
+            assert has_ab_init, (
+                f"Should resolve to a/b/__init__.py, got: {result.depends_path}"
+            )
+            assert not has_wrong, (
+                f"Should NOT resolve to target.py, got: {result.depends_path}"
+            )
+
+    def test_import_module_style(self):
+        """
+        测试 import a.b.c.target 形式的导入
+        调用 a.b.c.target.TargetClass() 时应该正确解析到 a/b/c/target.py
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 创建 a/b/target.py（干扰项）
+            ab_dir = Path(tmpdir) / "a" / "b"
+            ab_dir.mkdir(parents=True)
+            (ab_dir / "__init__.py").write_text("")
+            (ab_dir / "target.py").write_text(
+                'class TargetClass:\n    """a.b.target"""\n    pass'
+            )
+            (Path(tmpdir) / "a" / "__init__.py").write_text("")
+
+            # 创建 a/b/c/target.py（正确目标）
+            abc_dir = Path(tmpdir) / "a" / "b" / "c"
+            abc_dir.mkdir(parents=True)
+            (abc_dir / "__init__.py").write_text("")
+            (abc_dir / "target.py").write_text(
+                'class TargetClass:\n    """a.b.c.target"""\n    pass'
+            )
+
+            # 使用 import a.b.c.target 形式
+            (Path(tmpdir) / "main.py").write_text(
+                """
+import a.b.c.target
+
+class MyClass:
+    def __init__(self):
+        self.obj = a.b.c.target.TargetClass()
+"""
+            )
+
+            resolver = DependencyResolver(tmpdir)
+            result = resolver.analyze_class("MyClass")
+
+            assert result is not None
+            assert len(result.depends_path) > 0
+
+            # 检查返回的是 a/b/c/target.py
+            correct_path = any(
+                "a/b/c/target.py" in p or "a\\b\\c\\target.py" in p
+                for p in result.depends_path
+            )
+            assert correct_path, (
+                f"Should resolve to a/b/c/target.py, got: {result.depends_path}"
+            )
+
     def test_same_name_class_different_modules(self):
         """
         测试场景：a.b.target 和 a.b.c.target 都有同名类 SameNameClass
@@ -382,17 +567,27 @@ class MyClass:
             wrong_path = False
             for path in result.depends_path:
                 # 检查是否包含 a/b/c 或 a\b\c
-                if ("a/b/c/target.py" in path or "a\\b\\c\\target.py" in path
-                        or path.endswith("a/b/c/target.py")
-                        or path.endswith("a\\b\\c\\target.py")):
+                if (
+                    "a/b/c/target.py" in path
+                    or "a\\b\\c\\target.py" in path
+                    or path.endswith("a/b/c/target.py")
+                    or path.endswith("a\\b\\c\\target.py")
+                ):
                     correct_path = True
                 # 检查是否错误地包含 a/b/target.py（但不是 a/b/c/target.py）
-                if (("a/b/target.py" in path or "a\\b\\target.py" in path)
-                        and "a/b/c" not in path and "a\\b\\c" not in path):
+                if (
+                    ("a/b/target.py" in path or "a\\b\\target.py" in path)
+                    and "a/b/c" not in path
+                    and "a\\b\\c" not in path
+                ):
                     wrong_path = True
 
-            assert correct_path, f"Should resolve to a/b/c/target.py, got: {result.depends_path}"
-            assert not wrong_path, f"Should NOT resolve to a/b/target.py, got: {result.depends_path}"
+            assert correct_path, (
+                f"Should resolve to a/b/c/target.py, got: {result.depends_path}"
+            )
+            assert not wrong_path, (
+                f"Should NOT resolve to a/b/target.py, got: {result.depends_path}"
+            )
 
 
 if __name__ == "__main__":

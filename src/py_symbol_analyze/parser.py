@@ -79,10 +79,13 @@ class PythonParser:
         def process_import(node: Node):
             if node.type == "import_statement":
                 # import foo, bar as b
+                # 对于 import a.b.c，代码中通过 a.b.c.xxx 使用
+                # 存储完整路径作为 key 避免覆盖（如 import a.b 和 import a.c）
                 for child in node.children:
                     if child.type == "dotted_name":
                         name = self.get_node_text(child, source_bytes)
-                        imports[name.split(".")[-1]] = name
+                        # 使用完整路径作为 key，避免多个导入冲突
+                        imports[name] = name
                     elif child.type == "aliased_import":
                         dotted = None
                         alias = None
@@ -187,6 +190,65 @@ class PythonParser:
 
             return None
 
+        def extract_attribute_chain(
+            attr_node: Node, include_last: bool = False
+        ) -> Optional[str]:
+            """
+            从 attribute 节点提取完整的属性链
+
+            Args:
+                attr_node: attribute 类型的节点
+                include_last: 是否包含最后一部分（方法名/属性名）
+
+            如 a.b.c.func() 的 func_node 是 attribute:
+                - include_last=False: 返回 'a.b.c'
+                - include_last=True: 返回 'a.b.c.func'
+            如 obj.method() 返回 'obj'（无论 include_last）
+            如 self.xxx -> 返回 None (跳过 self/cls)
+            如 obj.method().sub() -> 返回 None (根是 call 节点，无法追踪)
+            如 无法追踪到根标识符 -> 返回 None
+            """
+            parts = []
+            current = attr_node
+            has_root = False  # 标记是否成功找到根标识符
+
+            # 收集属性链的所有部分
+            while current.type == "attribute":
+                attr_name = current.child_by_field_name("attribute")
+                if attr_name:
+                    parts.insert(0, self.get_node_text(attr_name, source_bytes))
+
+                obj = current.child_by_field_name("object")
+                if obj:
+                    current = obj
+                else:
+                    break
+
+            # 获取根标识符
+            if current.type == "identifier":
+                root = self.get_node_text(current, source_bytes)
+                if root in ("self", "cls"):
+                    return None
+                parts.insert(0, root)
+                has_root = True
+            elif current.type == "call":
+                # 链式调用如 obj.method().sub_method()
+                # 根是一个 call 节点，无法追踪到原始对象
+                return None
+            # 其他类型（如 subscript、tuple 等）无法追踪，has_root 保持 False
+
+            if not parts or not has_root:
+                return None
+
+            # 根据 include_last 决定是否包含最后一部分
+            if include_last:
+                return ".".join(parts)
+            elif len(parts) > 1:
+                return ".".join(parts[:-1])
+            else:
+                # 只有根标识符（如 obj.method() 返回 'obj'）
+                return parts[0]
+
         def traverse(n: Node):
             nonlocal calls_super
 
@@ -203,17 +265,18 @@ class PythonParser:
                         else:
                             callees.add(func_name)
                     elif func_node.type == "attribute":
-                        # 属性调用: obj.method() 或 Class.method()
-                        root_name = extract_attribute_root(func_node)
-                        if root_name:
+                        # 属性调用: obj.method() 或 a.b.c.func()
+                        # 提取完整的属性链（不包括方法名）
+                        chain = extract_attribute_chain(func_node)
+                        if chain:
                             # super() 使用 calls_super 标志跟踪，不加入 callees
-                            if root_name == "super":
+                            if chain == "super":
                                 calls_super = True
                             else:
-                                callees.add(root_name)
+                                callees.add(chain)
 
             elif n.type == "attribute":
-                # 处理属性访问: ddd.xxx 作为参数或赋值值
+                # 处理属性访问: a.b.CONSTANT 作为参数或赋值值
                 # 检查父节点，确保不是 call 的 function 部分（那部分已经处理了）
                 parent = n.parent
                 if parent and parent.type != "attribute":
@@ -234,9 +297,12 @@ class PythonParser:
                         "set",
                         "subscript",
                     ):
-                        root_name = extract_attribute_root(n)
-                        if root_name and root_name != "super":
-                            callees.add(root_name)
+                        # 使用 extract_attribute_chain 提取完整的属性链
+                        # include_last=True 因为这是属性访问，最后一部分是属性名
+                        # 但对于 import 匹配，我们只需要模块路径部分
+                        chain = extract_attribute_chain(n, include_last=False)
+                        if chain and chain != "super":
+                            callees.add(chain)
 
             elif n.type == "identifier":
                 # 检查是否是类实例化或引用
@@ -619,20 +685,20 @@ class ProjectParser:
         mtime = path.stat().st_mtime
 
         # 如果文件缓存有效，优先从 SQLite 获取
+        # 注意：空符号列表也是有效的缓存数据（文件可能没有类或函数）
         if self._cache.is_file_cache_valid(str(path), mtime):
             symbols = self._cache.find_symbols_by_file(str(path))
-            if symbols:
-                classes = [
-                    _parsed_symbol_from_dict(s)
-                    for s in symbols
-                    if s["node_type"] == "class"
-                ]
-                functions = [
-                    _parsed_symbol_from_dict(s)
-                    for s in symbols
-                    if s["node_type"] in ("function", "method")
-                ]
-                return classes, functions
+            classes = [
+                _parsed_symbol_from_dict(s)
+                for s in symbols
+                if s["node_type"] == "class"
+            ]
+            functions = [
+                _parsed_symbol_from_dict(s)
+                for s in symbols
+                if s["node_type"] in ("function", "method")
+            ]
+            return classes, functions
 
         # 需要重新解析文件
         result = self._parse_file_cached(path)
