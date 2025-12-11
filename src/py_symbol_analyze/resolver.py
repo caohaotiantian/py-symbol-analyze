@@ -132,7 +132,8 @@ class DependencyResolver:
             remaining = import_path[level:]
             if remaining:
                 parts = remaining.split(".")
-                potential_path = base_dir / "/".join(parts)
+                # 使用 Path.joinpath 来确保跨平台兼容
+                potential_path = base_dir.joinpath(*parts)
             else:
                 potential_path = base_dir
 
@@ -147,7 +148,8 @@ class DependencyResolver:
 
         # 尝试在项目根目录下查找
         for i in range(len(parts), 0, -1):
-            potential_path = self.project_root / "/".join(parts[:i])
+            # 使用 Path.joinpath 来确保跨平台兼容
+            potential_path = self.project_root.joinpath(*parts[:i])
 
             # 检查是否是 .py 文件
             py_file = potential_path.with_suffix(".py")
@@ -356,11 +358,10 @@ class DependencyResolver:
             _get_logger().debug(
                 f"导入路径 {import_path} 直接解析失败，尝试带路径提示的全局查找"
             )
-            # 将导入路径转换为文件路径提示（如 a.b.c.DBUtil -> a/b/c）
+            # 将导入路径转换为路径部分列表（如 a.b.c.DBUtil -> ["a", "b", "c"]）
             path_parts = import_path.split(".")[:-1]  # 去掉最后的类/函数名
-            path_hint = "/".join(path_parts) if path_parts else None
 
-            found_symbol = self._find_symbol_with_path_hint(callee_name, path_hint)
+            found_symbol = self._find_symbol_with_path_hint(callee_name, path_parts)
             if found_symbol:
                 return Dependency(
                     name=callee_name,
@@ -413,7 +414,7 @@ class DependencyResolver:
         return None
 
     def _find_symbol_with_path_hint(
-        self, symbol_name: str, path_hint: Optional[str]
+        self, symbol_name: str, path_parts: Optional[List[str]]
     ) -> Optional[ParsedSymbol]:
         """
         使用路径提示查找符号
@@ -422,7 +423,7 @@ class DependencyResolver:
 
         Args:
             symbol_name: 符号名称
-            path_hint: 路径提示（如 "a/b/c"），用于过滤文件路径
+            path_parts: 路径部分列表（如 ["a", "b", "c"]），用于匹配文件路径
 
         Returns:
             匹配的符号，如果没有找到则返回 None
@@ -433,13 +434,57 @@ class DependencyResolver:
             return None
 
         # 如果有路径提示，优先返回文件路径匹配的符号
-        if path_hint:
+        if path_parts:
             for candidate in candidates:
-                if path_hint in candidate.file_path:
+                # 将文件路径转换为 Path 对象，获取其各部分
+                file_path = Path(candidate.file_path)
+                file_parts = file_path.parts
+
+                # 检查路径部分是否全部包含在文件路径中（按顺序）
+                if self._path_parts_match(path_parts, file_parts):
                     return candidate
 
         # 如果没有路径提示或没有匹配，返回第一个
         return candidates[0]
+
+    def _path_parts_match(
+        self, path_parts: List[str], file_parts: Tuple[str, ...]
+    ) -> bool:
+        """
+        检查路径部分是否按顺序匹配文件路径
+
+        Args:
+            path_parts: 要匹配的路径部分列表（如 ["a", "b", "c"]）
+            file_parts: 文件路径的各部分
+
+        Returns:
+            是否匹配
+        """
+        if not path_parts:
+            return True
+
+        # 在文件路径部分中查找匹配
+        # 例如：path_parts = ["a", "b", "c"]
+        # file_parts = ("home", "user", "project", "a", "b", "c", "target.py")
+        # 应该匹配
+
+        path_len = len(path_parts)
+        file_len = len(file_parts)
+
+        if path_len > file_len:
+            return False
+
+        # 滑动窗口匹配
+        for i in range(file_len - path_len + 1):
+            match = True
+            for j in range(path_len):
+                if path_parts[j] != file_parts[i + j]:
+                    match = False
+                    break
+            if match:
+                return True
+
+        return False
 
     def _find_symbol_in_file(
         self, symbol_name: str, file_path: str
