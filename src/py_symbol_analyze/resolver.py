@@ -333,7 +333,7 @@ class DependencyResolver:
         self, callee_name: str, context_symbol: ParsedSymbol
     ) -> Optional[Dependency]:
         """解析单个依赖"""
-        # 首先检查导入信息
+        # 首先检查导入信息（这是最准确的方式）
         if callee_name in context_symbol.imports:
             import_path = context_symbol.imports[callee_name]
             file_path = self._resolve_import_path(import_path, context_symbol.file_path)
@@ -351,8 +351,16 @@ class DependencyResolver:
                         host_class=found_symbol.host_class,
                     )
 
-        # 尝试在项目中全局查找
-        found_symbol = self.project_parser.find_symbol(callee_name)
+            # 如果有导入信息但解析失败，不进行全局查找（避免误报）
+            # 因为导入路径明确指定了模块位置，全局查找可能返回错误的同名符号
+            _get_logger().debug(
+                f"导入路径 {import_path} 解析失败，跳过全局查找以避免误报"
+            )
+            return None
+
+        # 只有当没有导入信息时，才尝试在同文件或项目中查找
+        # 首先检查是否在同一文件中定义
+        found_symbol = self._find_symbol_in_file(callee_name, context_symbol.file_path)
         if found_symbol:
             return Dependency(
                 name=callee_name,
@@ -421,25 +429,25 @@ class DependencyResolver:
         # 解析依赖
         dependencies = self.resolve_dependencies(symbol)
 
-        # 构建结果
+        # 构建结果（depends 和 depends_path 一一对应，不去重）
         depends = []
         depends_path = []
 
         for dep in dependencies:
-            if dep.content:
+            if dep.content and dep.file_path:
                 # 如果依赖是方法，获取其所属类的完整内容
-                if dep.host_class and dep.file_path:
+                if dep.host_class:
                     host_class_symbol = self._find_symbol_in_file(
                         dep.host_class, dep.file_path
                     )
                     if host_class_symbol:
                         depends.append(host_class_symbol.content)
+                        depends_path.append(dep.file_path)
                     else:
                         depends.append(dep.content)
+                        depends_path.append(dep.file_path)
                 else:
                     depends.append(dep.content)
-
-                if dep.file_path and dep.file_path not in depends_path:
                     depends_path.append(dep.file_path)
 
         return ClassAnalysisResult(
@@ -486,25 +494,25 @@ class DependencyResolver:
         # 解析依赖
         dependencies = self.resolve_dependencies(symbol)
 
-        # 构建结果
+        # 构建结果（depends 和 depends_path 一一对应，不去重）
         depends = []
         depends_path = []
 
         for dep in dependencies:
-            if dep.content:
+            if dep.content and dep.file_path:
                 # 如果依赖是方法，获取其所属类的完整内容
-                if dep.host_class and dep.file_path:
+                if dep.host_class:
                     host_class_symbol = self._find_symbol_in_file(
                         dep.host_class, dep.file_path
                     )
                     if host_class_symbol:
                         depends.append(host_class_symbol.content)
+                        depends_path.append(dep.file_path)
                     else:
                         depends.append(dep.content)
+                        depends_path.append(dep.file_path)
                 else:
                     depends.append(dep.content)
-
-                if dep.file_path and dep.file_path not in depends_path:
                     depends_path.append(dep.file_path)
 
         return FunctionAnalysisResult(

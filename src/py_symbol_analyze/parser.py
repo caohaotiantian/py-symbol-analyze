@@ -96,39 +96,48 @@ class PythonParser:
 
             elif node.type == "import_from_statement":
                 # from foo import bar, baz as z
+                # 首先找到模块名（在 'import' 关键字之前的 dotted_name 或 relative_import）
                 module = None
-                for child in node.children:
-                    if child.type == "dotted_name":
-                        module = self.get_node_text(child, source_bytes)
-                    elif child.type == "relative_import":
-                        # 处理相对导入 from . import xxx 或 from ..foo import xxx
-                        module = self.get_node_text(child, source_bytes)
+                import_keyword_found = False
 
-                # 提取导入的名称
                 for child in node.children:
-                    if child.type == "dotted_name" and child != node.children[1]:
-                        name = self.get_node_text(child, source_bytes)
-                        full_path = f"{module}.{name}" if module else name
-                        imports[name.split(".")[-1]] = full_path
-                    elif child.type == "aliased_import":
-                        original = None
-                        alias = None
-                        for c in child.children:
-                            if (
-                                c.type in ("dotted_name", "identifier")
-                                and original is None
-                            ):
-                                original = self.get_node_text(c, source_bytes)
-                            elif c.type == "identifier":
-                                alias = self.get_node_text(c, source_bytes)
-                        if original:
-                            full_path = f"{module}.{original}" if module else original
-                            imports[alias or original] = full_path
-                    elif child.type == "identifier":
-                        name = self.get_node_text(child, source_bytes)
-                        if name not in ("from", "import", "as"):
+                    if child.type == "import":
+                        import_keyword_found = True
+                        continue
+
+                    if not import_keyword_found:
+                        # import 关键字之前的是模块名
+                        if child.type == "dotted_name":
+                            module = self.get_node_text(child, source_bytes)
+                        elif child.type == "relative_import":
+                            module = self.get_node_text(child, source_bytes)
+                    else:
+                        # import 关键字之后的是导入的名称
+                        if child.type == "dotted_name":
+                            name = self.get_node_text(child, source_bytes)
                             full_path = f"{module}.{name}" if module else name
-                            imports[name] = full_path
+                            imports[name.split(".")[-1]] = full_path
+                        elif child.type == "aliased_import":
+                            original = None
+                            alias = None
+                            for c in child.children:
+                                if (
+                                    c.type in ("dotted_name", "identifier")
+                                    and original is None
+                                ):
+                                    original = self.get_node_text(c, source_bytes)
+                                elif c.type == "identifier":
+                                    alias = self.get_node_text(c, source_bytes)
+                            if original:
+                                full_path = (
+                                    f"{module}.{original}" if module else original
+                                )
+                                imports[alias or original] = full_path
+                        elif child.type == "identifier":
+                            name = self.get_node_text(child, source_bytes)
+                            if name not in ("from", "import", "as"):
+                                full_path = f"{module}.{name}" if module else name
+                                imports[name] = full_path
 
         def traverse(node: Node):
             process_import(node)
