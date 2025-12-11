@@ -197,17 +197,20 @@ class PythonParser:
                     if func_node.type == "identifier":
                         # 直接调用: foo()
                         func_name = self.get_node_text(func_node, source_bytes)
-                        callees.add(func_name)
-                        # 检测 super() 调用
+                        # super() 使用 calls_super 标志跟踪，不加入 callees
                         if func_name == "super":
                             calls_super = True
+                        else:
+                            callees.add(func_name)
                     elif func_node.type == "attribute":
                         # 属性调用: obj.method() 或 Class.method()
                         root_name = extract_attribute_root(func_node)
                         if root_name:
-                            callees.add(root_name)
+                            # super() 使用 calls_super 标志跟踪，不加入 callees
                             if root_name == "super":
                                 calls_super = True
+                            else:
+                                callees.add(root_name)
 
             elif n.type == "attribute":
                 # 处理属性访问: ddd.xxx 作为参数或赋值值
