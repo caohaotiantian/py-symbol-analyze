@@ -4,6 +4,7 @@
 使用 jedi 进行精确的符号解析，结合 tree-sitter 的解析结果。
 """
 
+import os
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -17,6 +18,21 @@ from .models import (
     FunctionAnalysisResult,
 )
 from .parser import ParsedSymbol, ProjectParser
+
+
+def _normalize_path(path: str) -> str:
+    """
+    标准化路径字符串，统一使用正斜杠作为分隔符
+
+    这确保在 Windows 和 Linux 上路径比较的一致性。
+
+    Args:
+        path: 文件路径
+
+    Returns:
+        使用正斜杠的标准化路径
+    """
+    return path.replace(os.sep, "/")
 
 
 def _get_logger():
@@ -132,7 +148,7 @@ class DependencyResolver:
             remaining = import_path[level:]
             if remaining:
                 parts = remaining.split(".")
-                potential_path = base_dir / "/".join(parts)
+                potential_path = base_dir.joinpath(*parts)
             else:
                 potential_path = base_dir
 
@@ -147,7 +163,7 @@ class DependencyResolver:
 
         # 尝试在项目根目录下查找
         for i in range(len(parts), 0, -1):
-            potential_path = self.project_root / "/".join(parts[:i])
+            potential_path = self.project_root.joinpath(*parts[:i])
 
             # 检查是否是 .py 文件
             py_file = potential_path.with_suffix(".py")
@@ -357,6 +373,7 @@ class DependencyResolver:
                 f"导入路径 {import_path} 直接解析失败，尝试带路径提示的全局查找"
             )
             # 将导入路径转换为文件路径提示（如 a.b.c.DBUtil -> a/b/c）
+            # 使用正斜杠以便跨平台匹配（路径比较时会统一格式）
             path_parts = import_path.split(".")[:-1]  # 去掉最后的类/函数名
             path_hint = "/".join(path_parts) if path_parts else None
 
@@ -433,9 +450,12 @@ class DependencyResolver:
             return None
 
         # 如果有路径提示，优先返回文件路径匹配的符号
+        # 标准化路径以确保跨平台兼容性
         if path_hint:
+            normalized_hint = _normalize_path(path_hint)
             for candidate in candidates:
-                if path_hint in candidate.file_path:
+                normalized_file_path = _normalize_path(candidate.file_path)
+                if normalized_hint in normalized_file_path:
                     return candidate
 
         # 如果没有路径提示或没有匹配，返回第一个
@@ -535,7 +555,11 @@ class DependencyResolver:
             candidates = [c for c in candidates if c.host_class == host_class]
 
         if file_path:
-            candidates = [c for c in candidates if file_path in c.file_path]
+            # 标准化路径以确保跨平台兼容性
+            normalized_hint = _normalize_path(file_path)
+            candidates = [
+                c for c in candidates if normalized_hint in _normalize_path(c.file_path)
+            ]
 
         if not candidates:
             _get_logger().warning(f"未找到函数: {function_name}")

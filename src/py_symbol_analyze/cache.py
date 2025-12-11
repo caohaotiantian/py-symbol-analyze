@@ -6,12 +6,28 @@ SQLite3 缓存管理模块
 
 import hashlib
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Tuple
 
 from .logger import get_logger
+
+
+def _normalize_path(path: str) -> str:
+    """
+    标准化路径字符串，统一使用正斜杠作为分隔符
+
+    这确保在 Windows 和 Linux 上路径比较的一致性。
+
+    Args:
+        path: 文件路径
+
+    Returns:
+        使用正斜杠的标准化路径
+    """
+    return path.replace(os.sep, "/")
 
 
 def _get_logger():
@@ -212,6 +228,7 @@ class SymbolCache:
         Returns:
             (mtime, content_hash, source_code) 或 None
         """
+        normalized_path = _normalize_path(file_path)
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -220,7 +237,7 @@ class SymbolCache:
                 FROM file_cache 
                 WHERE file_path = ?
                 """,
-                (file_path,),
+                (normalized_path,),
             )
             row = cursor.fetchone()
             if row:
@@ -229,6 +246,7 @@ class SymbolCache:
 
     def set_file_cache(self, file_path: str, mtime: float, source_code: str):
         """设置文件缓存"""
+        normalized_path = _normalize_path(file_path)
         content_hash = self._compute_hash(source_code)
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -238,7 +256,7 @@ class SymbolCache:
                 (file_path, mtime, content_hash, source_code)
                 VALUES (?, ?, ?, ?)
                 """,
-                (file_path, mtime, content_hash, source_code),
+                (normalized_path, mtime, content_hash, source_code),
             )
             conn.commit()
 
@@ -252,11 +270,12 @@ class SymbolCache:
 
     def remove_file_cache(self, file_path: str):
         """移除文件缓存"""
+        normalized_path = _normalize_path(file_path)
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "DELETE FROM file_cache WHERE file_path = ?",
-                (file_path,),
+                (normalized_path,),
             )
             conn.commit()
 
@@ -290,7 +309,7 @@ class SymbolCache:
                     symbol_data["start_col"],
                     symbol_data["end_col"],
                     symbol_data["content"],
-                    symbol_data["file_path"],
+                    _normalize_path(symbol_data["file_path"]),
                     symbol_data.get("host_class"),
                     json.dumps(symbol_data.get("callees", [])),
                     json.dumps(symbol_data.get("imports", {})),
@@ -324,7 +343,7 @@ class SymbolCache:
                         s["start_col"],
                         s["end_col"],
                         s["content"],
-                        s["file_path"],
+                        _normalize_path(s["file_path"]),
                         s.get("host_class"),
                         json.dumps(s.get("callees", [])),
                         json.dumps(s.get("imports", {})),
@@ -374,18 +393,25 @@ class SymbolCache:
                 results.append(self._row_to_symbol_dict(row))
 
             # 如果有文件提示，优先排序
+            # 标准化路径以确保跨平台兼容性
             if file_hint and results:
-                results.sort(key=lambda x: 0 if file_hint in x["file_path"] else 1)
+                normalized_hint = _normalize_path(file_hint)
+                results.sort(
+                    key=lambda x: 0
+                    if normalized_hint in _normalize_path(x["file_path"])
+                    else 1
+                )
 
             return results
 
     def find_symbols_by_file(self, file_path: str) -> List[Dict[str, Any]]:
         """获取文件中的所有符号"""
+        normalized_path = _normalize_path(file_path)
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT * FROM symbol_index WHERE file_path = ?",
-                (file_path,),
+                (normalized_path,),
             )
             rows = cursor.fetchall()
             return [self._row_to_symbol_dict(row) for row in rows]
@@ -423,11 +449,12 @@ class SymbolCache:
 
     def remove_symbols_by_file(self, file_path: str):
         """移除文件的所有符号"""
+        normalized_path = _normalize_path(file_path)
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "DELETE FROM symbol_index WHERE file_path = ?",
-                (file_path,),
+                (normalized_path,),
             )
             conn.commit()
 
